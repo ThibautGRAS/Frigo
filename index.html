@@ -921,7 +921,13 @@ DOMAINS.forEach((d,di)=>{
     const sp=new THREE.Sprite(new THREE.SpriteMaterial({map:CTEX(cv),transparent:true,depthTest:false,opacity:0}));
     sp.scale.set(size*cv.width/cv.height,size,1);lg.add(sp);return sp;
   }
-  AXES.forEach((a,ai)=>{const sp=lab(a.id,null,"#D42233",.34);sp.position.set(cellLocal(ai,0).x,(NY-1)/2*S+0.95,0.4);sp.userData={type:"axe",index:ai};});
+  const axShortT={A1:"SOURCES",A2:"DIAGNOSTIC",A3:"RÉDUCTION"};
+  AXES.forEach((a,ai)=>{
+    /* quinconce : le rang du milieu (A2) est remonté pour que les noms ne se chevauchent pas */
+    const yUp=(NY-1)/2*S+0.95+(ai===1?0.62:0);
+    const sp=lab(a.id,axShortT[a.id]||a.name,"#D42233",.32);
+    sp.position.set(cellLocal(ai,0).x,yUp,0.4);sp.userData={type:"axe",index:ai};
+  });
   LEVIERS.forEach((l,li)=>{const sp=lab(l.id,SHORT[l.id],"#123A7E",.32);sp.position.set(-((NX-1)/2*S+1.15),cellLocal(0,li).y,0.4);sp.userData={type:"levier",index:li};});
 });
 
@@ -1216,17 +1222,25 @@ function openMetaCtx(type,index){
   const it=(type==="axe"?AXES:LEVIERS)[index];
   const isAxe=type==="axe";
   const d=DOMAINS[openDom];
-  /* briques présentes de ce domaine pour cet axe / levier */
   const own=Object.values(CELLS).filter(c=>c.d===openDom&&(isAxe?c.a===index:c.l===index));
-  document.getElementById("cEye").innerHTML=
-    `${it.id} dans ${d.id} — ${d.name}`;
-  document.getElementById("cTitle").textContent=(isAxe?it.short+" — ":"")+it.name;
+  const nEss=own.filter(c=>c.essential).length;
+  /* Description CROISÉE : le rôle de l'axe/levier décliné dans le vocabulaire du domaine */
+  const cross=isAxe
+    ? `Dans le domaine <b>${d.name}</b>, l'axe <b>${it.name}</b> porte sur ${d.obj} au sein des ${d.sys} : `+
+      (index===0?`identifier et hiérarchiser ces phénomènes et leurs voies de transfert.`
+       :index===1?`les caractériser via ${d.moyen}.`
+       :`les maîtriser jusqu'aux ${d.solu}.`)
+    : `Appliqué à <b>${d.name}</b>, le levier <b>${it.name}</b> outille le traitement des ${d.obj} : `+
+      `${it.dev[0].charAt(0).toLowerCase()+it.dev[0].slice(1)}, en s'appuyant sur ${d.moyen}.`;
+  document.getElementById("cEye").innerHTML=`${it.id} · ${d.id} ${d.name}`;
+  document.getElementById("cTitle").textContent=it.name;
   document.getElementById("cBadges").innerHTML=
     `<span class="cb hot">${d.id} ${d.name}</span>
-     <span class="cb">${own.length} brique${own.length>1?"s":""}</span>`;
+     <span class="cb">${own.length} brique${own.length>1?"s":""}${nEss?` · ${nEss} essentielle${nEss>1?"s":""}`:""}</span>`;
   document.getElementById("cBody").innerHTML=`
-    <div class="csec"><div class="st sg">Rôle</div><p>${it.desc}</p></div>
-    <div class="csec"><div class="st sg">Dans ce domaine</div>
+    <div class="csec"><div class="st sg">Dans ce domaine</div><p>${cross}</p></div>
+    <div class="csec"><div class="st sg">Rôle général de ${it.id}</div><p>${it.desc}</p></div>
+    <div class="csec"><div class="st sg">Briques ${it.id} × ${d.id}</div>
       ${own.length?`<div class="linkli">${own.map(c=>
         `<button class="linkb" data-k="${c.key}"><span class="lk">${AXES[c.a].id}×${LEVIERS[c.l].id}${c.essential?" ●":""}</span>${c.title}</button>`).join("")}</div>`
       :`<p>Aucune brique retenue pour ce croisement dans ${d.name}.</p>`}</div>`;
