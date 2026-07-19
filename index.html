@@ -889,20 +889,20 @@ DOMAINS.forEach((d,di)=>{
     const present=!!cell;
     const ess=present&&cell.essential;
     const mat=present?new THREE.MeshPhysicalMaterial({
-      color:0x3E7BD8,metalness:0,roughness:.28,roughnessMap:iceRough,
-      transparent:true,opacity:.75,depthWrite:false,
-      clearcoat:.9,clearcoatRoughness:.18,envMapIntensity:1.1,
-      emissive:0x1A3C8A,emissiveIntensity:.22
+      color:0x3E7BD8,metalness:0,roughness:.26,roughnessMap:iceRough,
+      transparent:true,opacity:.94,depthWrite:true,
+      clearcoat:.88,clearcoatRoughness:.16,envMapIntensity:1.0,
+      emissive:0x1E4296,emissiveIntensity:.26
     }):new THREE.MeshPhysicalMaterial({
-      color:0x6E9CC8,metalness:0,roughness:.35,
-      transparent:true,opacity:.03,depthWrite:false,
-      envMapIntensity:.2,emissive:0x1A3C6A,emissiveIntensity:.02
+      color:0x7090B8,metalness:0,roughness:.4,
+      transparent:true,opacity:.04,depthWrite:false,
+      envMapIntensity:.15,emissive:0x1A3C6A,emissiveIntensity:.02
     });
     const m=new THREE.Mesh(boxGeo,mat);
     m.position.copy(cellLocal(ai,li));
     m.castShadow=false;
     m.userData={key,cell,di,ai,li,present,boost:0,
-      tgt:{opacity:present?.62:.035,emissiveI:present?.28:.06,scale:1,edge:present?.5:.06,red:0}};
+      tgt:{opacity:present?.92:.035,emissiveI:present?.28:.06,scale:1,edge:present?.5:.06,red:0}};
     const edges=new THREE.LineSegments(edgeGeo,new THREE.LineBasicMaterial({
       color:present?(ess?0xA8C0F2:0x7FA6E8):0x6E88B4,transparent:true,
       opacity:present?.62:.14,
@@ -1046,14 +1046,14 @@ function setTargets(){
     const{cell,di,ai,li,present}=m.userData;const t=m.userData.tgt;
     const ess=present&&cell.essential;
     /* état de repos */
-    let op=present?.62:.035, em=present?.28:.06, sc=1, ed=present?.5:.06, red=0, info=0, glow=present?.22:0;
+    let op=present?.92:.035, em=present?.28:.06, sc=1, ed=present?.5:.06, red=0, info=0, glow=present?.22:0;
     const metaOn=metaKey&&((metaKey.type==="axe"&&ai===metaKey.index)||(metaKey.type==="levier"&&li===metaKey.index)||(metaKey.type==="domaine"&&di===metaKey.index));
     if(metaKey&&metaKey.dom==null){                    /* fiche axe/levier/domaine — cube fermé */
       if(metaOn&&present){op=.82;em=.45;ed=1;sc=1.05;red=ess?.95:0;glow=ess?.45:.3;}
       else{op=present?.07:.04;em=.12;ed=.08;glow=0;}
     }else if(openDom>=0){
       if(di===openDom){
-        if(!present){op=.07;em=.06;ed=.05;glow=0;}     /* fantôme = même transparence que hors domaine */
+        if(!present){op=.05;em=.04;ed=.04;glow=0;}     /* fantôme = même transparence que hors domaine */
         else{
           op=ess?.97:.76;em=ess?.45:.35;ed=.95;info=1;
           red=ess?1:0;glow=ess?.55:.3;                 /* rouge CETIM franc, réservé aux essentielles */
@@ -1069,7 +1069,7 @@ function setTargets(){
           }
         }
       }else{
-        op=present?.07:.02;em=.08;ed=.06;glow=0;
+        op=present?.05:.02;em=.04;ed=.04;glow=0;
         if(present&&cardKey&&CELLS[cardKey].links.includes(m.userData.key)){op=.6;em=.5;ed=.95;red=ess?.5:.15;glow=.35;}
       }
     }
@@ -1561,7 +1561,7 @@ function animate(){
     mat.emissiveIntensity+=((T.emissiveI*pulse*life+boost)-mat.emissiveIntensity)*dt;
     /* anti-rose : le vernis et les reflets s'éteignent quand la brique vire au rouge */
     if(pr){
-      mat.envMapIntensity+=((THA.envBase-T.red*THA.envRed)-mat.envMapIntensity)*dt;
+      mat.envMapIntensity+=((THA.envBase-T.red*THA.envRed)*0.9-mat.envMapIntensity)*dt;
       mat.clearcoat+=((THA.ccBase-T.red*THA.ccRed)-mat.clearcoat)*dt;
     }
     const ess=pr&&m.userData.cell.essential;
