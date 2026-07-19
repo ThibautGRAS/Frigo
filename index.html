@@ -889,7 +889,7 @@ DOMAINS.forEach((d,di)=>{
     const present=!!cell;
     const ess=present&&cell.essential;
     const mat=present?new THREE.MeshPhysicalMaterial({
-      color:0x4A82C8,metalness:0,roughness:.32,roughnessMap:iceRough,
+      color:0x3E7BD8,metalness:0,roughness:.32,roughnessMap:iceRough,
       transparent:true,opacity:.9,depthWrite:false,
       transmission:.78,thickness:1.4,ior:1.31,
       attenuationDistance:2.8,attenuationColor:new THREE.Color(0x2E68C0),
@@ -1055,7 +1055,7 @@ function setTargets(){
       else{op=present?.07:.04;em=.12;ed=.08;glow=0;}
     }else if(openDom>=0){
       if(di===openDom){
-        if(!present){op=.09;em=.14;ed=.16;glow=0;}     /* fantôme dans la tranche */
+        if(!present){op=.07;em=.06;ed=.05;glow=0;}     /* fantôme = même transparence que hors domaine */
         else{
           op=ess?.97:.76;em=ess?.45:.35;ed=.95;info=1;
           red=ess?1:0;glow=ess?.55:.3;                 /* rouge CETIM franc, réservé aux essentielles */
@@ -1518,8 +1518,8 @@ const RED_C=new THREE.Color(0xEF3346),RED_E=new THREE.Color(0x8F1220),
       EDGE_N=new THREE.Color(0x7FA6E8),EDGE_S=new THREE.Color(0xA8C0F2),EDGE_R=new THREE.Color(0xFF4D5C),
       GLOW_N=new THREE.Color(0x4E8CFF),GLOW_S=new THREE.Color(0xFF4757),
       BLUE_E=new THREE.Color(0x0A2050),
-      STRAT_E=new THREE.Color(0x241428),GLASS=new THREE.Color(0x3A72C8),
-      GLASS_S=new THREE.Color(0x5290DC),
+      STRAT_E=new THREE.Color(0x241428),GLASS=new THREE.Color(0x3E7BD8),
+      GLASS_S=new THREE.Color(0x4C8BEC),
       GHOST_C=new THREE.Color(0x9FBADF),GHOST_E=new THREE.Color(0x27436E),
       WHITE_C=new THREE.Color(0xC8D8EA),WHITE_E=new THREE.Color(0xA0B8D0);
 let last=performance.now(),startT=-1;
