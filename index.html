@@ -516,6 +516,19 @@ const SECONDARY={
 };
 const PRESENT={};
 Object.keys(STRATEGIC).forEach(d=>PRESENT[d]=STRATEGIC[d].concat(SECONDARY[d]||[]));
+/* Règle métier : si un axe est présent dans un domaine (au moins une brique),
+   il doit forcément porter sa brique A×L4 (capitalisation / standardisation).
+   Les A×L4 manquantes sont ajoutées comme SECONDAIRES. */
+Object.keys(PRESENT).forEach(d=>{
+  ["A1","A2","A3"].forEach(ax=>{
+    const axPresent=PRESENT[d].some(k=>k.startsWith(ax+"-"));
+    const l4=ax+"-L4";
+    if(axPresent && !PRESENT[d].includes(l4)){
+      SECONDARY[d]=(SECONDARY[d]||[]).concat(l4);
+      PRESENT[d].push(l4);
+    }
+  });
+});
 /* Gabarits de contenu par croisement Axe × Levier */
 const TPL={
  "A1-L1":d=>({t:`Caractérisation & recalage des ${d.obj}`,
@@ -897,8 +910,8 @@ DOMAINS.forEach((d,di)=>{
       s:(Math.random()-.5)*.09,
       l:(Math.random()-.5)*.05+(1.5-li)*.014   /* dégradé vertical : haut plus clair */
     };
-    m.userData.baseS=.955+Math.random()*.07;
-    m.rotation.set((Math.random()-.5)*.04,(Math.random()-.5)*.05,(Math.random()-.5)*.04);
+    m.userData.baseS=.985+Math.random()*.025;
+    m.rotation.set((Math.random()-.5)*.015,(Math.random()-.5)*.02,(Math.random()-.5)*.015);
     m.userData.bornAt=0.7+di*0.16+(ai*NY+li)*0.028+Math.random()*0.06;
     m.scale.setScalar(0.001);
     m.userData.edges.material.opacity=0;
@@ -1526,12 +1539,15 @@ function animate(){
       mat.clearcoat+=((THA.ccBase-T.red*THA.ccRed)-mat.clearcoat)*dt;
     }
     const ess=pr&&m.userData.cell.essential;
-    const em=pr?(ess?STRAT_E:BLUE_E):GHOST_E;
+    /* couleur unie au repos ; l'essentiel se distingue (bleu plus clair) seulement
+       quand un domaine est ouvert et que cette brique en fait partie */
+    const inOpen=pr&&openDom>=0&&m.userData.di===openDom;
+    const em=pr?((ess&&inOpen)?STRAT_E:BLUE_E):GHOST_E;
     m.userData._ec=m.userData._ec||new THREE.Color().copy(em);
     m.userData._ec.copy(em).lerp(RED_E,T.red);
     mat.emissive.lerp(m.userData._ec,dt);
     m.userData._cc=m.userData._cc||new THREE.Color();
-    m.userData._cc.copy(pr?(ess?GLASS_S:GLASS):GHOST_C);
+    m.userData._cc.copy(pr?((ess&&inOpen)?GLASS_S:GLASS):GHOST_C);
     if(pr){const cv=m.userData.cvar;m.userData._cc.offsetHSL(cv.h,cv.s,cv.l);}
     m.userData._cc.lerp(RED_C,T.red);   /* transition complète vers le rouge, pas de teinte intermédiaire */
     mat.color.lerp(m.userData._cc,dt);
