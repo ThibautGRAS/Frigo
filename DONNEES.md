@@ -143,7 +143,7 @@ Pour chaque domaine, briques retenues (● essentielle, ○ secondaire) :
 | **L1** | ● | ○ | ● |
 | **L2** | · | · | ○ |
 | **L3** | · | · | ● |
-| **L4** | ● | ○ | · |
+| **L4** | ● | ○ | ○ |
 
 ### D2 — Machines tournantes
 
@@ -152,7 +152,7 @@ Pour chaque domaine, briques retenues (● essentielle, ○ secondaire) :
 | **L1** | ● | ○ | ● |
 | **L2** | ○ | ● | ○ |
 | **L3** | · | · | · |
-| **L4** | · | ● | · |
+| **L4** | ○ | ● | ○ |
 
 ### D3 — Bruit solidien
 
@@ -161,7 +161,7 @@ Pour chaque domaine, briques retenues (● essentielle, ○ secondaire) :
 | **L1** | ● | ● | ● |
 | **L2** | · | ○ | · |
 | **L3** | · | · | ○ |
-| **L4** | ● | ○ | · |
+| **L4** | ● | ○ | ○ |
 
 ### D4 — Imagerie acoustique
 
@@ -170,7 +170,7 @@ Pour chaque domaine, briques retenues (● essentielle, ○ secondaire) :
 | **L1** | ○ | ● | ○ |
 | **L2** | · | ● | · |
 | **L3** | · | ● | · |
-| **L4** | ○ | ● | · |
+| **L4** | ○ | ● | ○ |
 
 ### D5 — Systèmes électrifiés
 
@@ -179,7 +179,7 @@ Pour chaque domaine, briques retenues (● essentielle, ○ secondaire) :
 | **L1** | ● | · | ● |
 | **L2** | · | ● | · |
 | **L3** | · | ● | ○ |
-| **L4** | ● | ○ | · |
+| **L4** | ● | ○ | ○ |
 
 
 ---
@@ -377,26 +377,32 @@ Pour chaque domaine, briques retenues (● essentielle, ○ secondaire) :
   "D1": [
    "A2-L1",
    "A2-L4",
-   "A3-L2"
+   "A3-L2",
+   "A3-L4"
   ],
   "D2": [
    "A1-L2",
    "A2-L1",
-   "A3-L2"
+   "A3-L2",
+   "A1-L4",
+   "A3-L4"
   ],
   "D3": [
    "A2-L2",
    "A2-L4",
-   "A3-L3"
+   "A3-L3",
+   "A3-L4"
   ],
   "D4": [
    "A1-L1",
    "A1-L4",
-   "A3-L1"
+   "A3-L1",
+   "A3-L4"
   ],
   "D5": [
    "A2-L4",
-   "A3-L3"
+   "A3-L3",
+   "A3-L4"
   ]
  }
 }
