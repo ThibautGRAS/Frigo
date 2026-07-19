@@ -889,12 +889,12 @@ DOMAINS.forEach((d,di)=>{
     const present=!!cell;
     const ess=present&&cell.essential;
     const mat=present?new THREE.MeshPhysicalMaterial({
-      color:0x3E7BD8,metalness:0,roughness:.32,roughnessMap:iceRough,
-      transparent:true,opacity:.9,depthWrite:false,
-      transmission:.78,thickness:1.4,ior:1.31,
-      attenuationDistance:2.8,attenuationColor:new THREE.Color(0x2E68C0),
-      clearcoat:.85,clearcoatRoughness:.22,envMapIntensity:1.0,
-      emissive:0x1A3C8A,emissiveIntensity:.12
+      color:0x3E7BD8,metalness:0,roughness:.3,roughnessMap:iceRough,
+      transparent:true,opacity:.88,depthWrite:false,
+      transmission:.28,thickness:1.2,ior:1.31,
+      attenuationDistance:2.0,attenuationColor:new THREE.Color(0x2A5AB0),
+      clearcoat:.8,clearcoatRoughness:.2,envMapIntensity:1.05,
+      emissive:0x0A2860,emissiveIntensity:.18
     }):new THREE.MeshPhysicalMaterial({
       color:0x6E9CC8,metalness:0,roughness:.35,
       transparent:true,opacity:.03,depthWrite:false,
@@ -1561,7 +1561,7 @@ function animate(){
     /* transmission : maximale au repos (glaçon translucide), réduite quand mis en avant (plus dense/lisible) */
     if(pr){
       /* transmission plus basse quand mis en avant = la glace s'opacifie légèrement */
-      const tgtTrans=0.94-Math.max(0,T.opacity-0.56)*0.55;
+      const tgtTrans=0.28-Math.max(0,T.opacity-0.56)*0.18;
       mat.transmission+=(tgtTrans-mat.transmission)*dt;
     }
     mat.emissiveIntensity+=((T.emissiveI*pulse*life+boost)-mat.emissiveIntensity)*dt;
