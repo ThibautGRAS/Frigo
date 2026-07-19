@@ -1082,7 +1082,7 @@ function setTargets(){
           }
         }
       }else{
-        op=present?.06:.03;em=.14;ed=.09;glow=0;
+        op=present?.2:.03;em=.1;ed=.09;glow=0;
         if(present&&cardKey&&CELLS[cardKey].links.includes(m.userData.key)){op=.6;em=.5;ed=.95;red=ess?.5:.15;glow=.35;}
       }
     }
@@ -1531,7 +1531,8 @@ const RED_C=new THREE.Color(0xB0121F),RED_E=new THREE.Color(0x6E0C15),
       BLUE_E=new THREE.Color(0x081B40),
       STRAT_E=new THREE.Color(0x241428),GLASS=new THREE.Color(0x08234F),
       GLASS_S=new THREE.Color(0x24509C),
-      GHOST_C=new THREE.Color(0x9FBADF),GHOST_E=new THREE.Color(0x27436E);
+      GHOST_C=new THREE.Color(0x9FBADF),GHOST_E=new THREE.Color(0x27436E),
+      WHITE_C=new THREE.Color(0xEAF0FA),WHITE_E=new THREE.Color(0xBCCADF);
 let last=performance.now(),startT=-1;
 function animate(){
   requestAnimationFrame(animate);
@@ -1581,15 +1582,17 @@ function animate(){
     }
     const ess=pr&&m.userData.cell.essential;
     /* couleur unie au repos ; l'essentiel se distingue (bleu plus clair) seulement
-       quand un domaine est ouvert et que cette brique en fait partie */
+       quand un domaine est ouvert et que cette brique en fait partie ;
+       les briques des AUTRES domaines passent en blanc translucide */
     const inOpen=pr&&openDom>=0&&m.userData.di===openDom;
-    const em=pr?((ess&&inOpen)?STRAT_E:BLUE_E):GHOST_E;
+    const otherDom=pr&&openDom>=0&&m.userData.di!==openDom;
+    const em=pr?(otherDom?WHITE_E:((ess&&inOpen)?STRAT_E:BLUE_E)):GHOST_E;
     m.userData._ec=m.userData._ec||new THREE.Color().copy(em);
     m.userData._ec.copy(em).lerp(RED_E,T.red);
     mat.emissive.lerp(m.userData._ec,dt);
     m.userData._cc=m.userData._cc||new THREE.Color();
-    m.userData._cc.copy(pr?((ess&&inOpen)?GLASS_S:GLASS):GHOST_C);
-    if(pr){const cv=m.userData.cvar;m.userData._cc.offsetHSL(cv.h,cv.s,cv.l);}
+    m.userData._cc.copy(pr?(otherDom?WHITE_C:((ess&&inOpen)?GLASS_S:GLASS)):GHOST_C);
+    if(pr&&!otherDom){const cv=m.userData.cvar;m.userData._cc.offsetHSL(cv.h,cv.s,cv.l);}
     m.userData._cc.lerp(RED_C,T.red);   /* transition complète vers le rouge, pas de teinte intermédiaire */
     mat.color.lerp(m.userData._cc,dt);
     /* naissance en cascade au démarrage */
