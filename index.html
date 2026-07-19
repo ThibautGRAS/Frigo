@@ -1,0 +1,522 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>FrigoChef — Scanner de frigo</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{
+  --ink:#070B12;
+  --panel:rgba(255,255,255,.045);
+  --panel-border:rgba(140,220,255,.14);
+  --frost:#6FE7FF;
+  --frost-dim:rgba(111,231,255,.35);
+  --amber:#FFB35C;
+  --text:#E9F2F5;
+  --text-dim:#8FA3AE;
+  --radius:20px;
+  --safe-b:env(safe-area-inset-bottom,0px);
+}
+*{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{height:100%}
+body{background:var(--ink);color:var(--text);font-family:'Inter',system-ui,sans-serif;
+  overflow-x:hidden;min-height:100dvh}
+.bg{position:fixed;inset:0;z-index:-1;overflow:hidden}
+.bg::before{content:"";position:absolute;top:-30%;left:50%;transform:translateX(-50%);
+  width:140vw;height:70vh;border-radius:50%;
+  background:radial-gradient(ellipse at center, rgba(111,231,255,.14), transparent 65%);
+  filter:blur(20px)}
+.bg::after{content:"";position:absolute;inset:0;
+  background-image:linear-gradient(rgba(140,220,255,.05) 1px, transparent 1px),
+                   linear-gradient(90deg, rgba(140,220,255,.05) 1px, transparent 1px);
+  background-size:44px 44px;
+  mask-image:radial-gradient(ellipse 90% 60% at 50% 0%, black, transparent 80%)}
+.wrap{max-width:520px;margin:0 auto;padding:24px 20px calc(40px + var(--safe-b))}
+
+header{display:flex;align-items:center;gap:12px;margin-bottom:24px}
+.logo{width:42px;height:42px;border-radius:12px;border:1px solid var(--panel-border);
+  background:linear-gradient(160deg, rgba(111,231,255,.18), rgba(111,231,255,.03));
+  display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.logo svg{width:22px;height:22px}
+h1{font-family:'Space Grotesk',sans-serif;font-size:1.35rem;font-weight:700;letter-spacing:-.02em}
+h1 span{color:var(--frost)}
+.tagline{font-family:'JetBrains Mono',monospace;font-size:.62rem;color:var(--text-dim);
+  letter-spacing:.14em;text-transform:uppercase;margin-top:2px}
+
+.hero{text-align:center;padding:26px 0 10px}
+.hero h2{font-family:'Space Grotesk',sans-serif;font-size:1.85rem;font-weight:700;
+  line-height:1.15;letter-spacing:-.03em;margin-bottom:14px}
+.hero h2 em{font-style:normal;color:var(--frost)}
+.hero p{color:var(--text-dim);font-size:.9rem;line-height:1.55;max-width:36ch;margin:0 auto 28px}
+.fridge-frame{position:relative;width:180px;height:180px;margin:0 auto 30px;border-radius:28px;
+  border:1px solid var(--panel-border);background:var(--panel);
+  display:flex;align-items:center;justify-content:center;
+  box-shadow:0 0 60px rgba(111,231,255,.08) inset}
+.fridge-frame .corner{position:absolute;width:22px;height:22px;border-color:var(--frost);border-style:solid;border-width:0}
+.corner.tl{top:-1px;left:-1px;border-top-width:2px;border-left-width:2px;border-top-left-radius:28px}
+.corner.tr{top:-1px;right:-1px;border-top-width:2px;border-right-width:2px;border-top-right-radius:28px}
+.corner.bl{bottom:-1px;left:-1px;border-bottom-width:2px;border-left-width:2px;border-bottom-left-radius:28px}
+.corner.br{bottom:-1px;right:-1px;border-bottom-width:2px;border-right-width:2px;border-bottom-right-radius:28px}
+.fridge-frame svg{width:80px;height:80px;opacity:.9}
+.idle-beam{position:absolute;left:8%;right:8%;height:2px;border-radius:2px;
+  background:linear-gradient(90deg, transparent, var(--frost), transparent);
+  animation:idleSweep 3.2s ease-in-out infinite;opacity:.7}
+@keyframes idleSweep{0%,100%{top:14%}50%{top:82%}}
+@media (prefers-reduced-motion:reduce){.idle-beam{animation:none;top:50%}}
+
+.btn{display:flex;align-items:center;justify-content:center;gap:10px;width:100%;
+  padding:16px 24px;border-radius:16px;border:none;cursor:pointer;
+  font-family:'Space Grotesk',sans-serif;font-size:1rem;font-weight:700;letter-spacing:.01em;
+  transition:transform .15s ease}
+.btn:active{transform:scale(.97)}
+.btn-primary{background:linear-gradient(135deg,#5FD8F2,#6FE7FF 60%,#9BF0FF);color:#04222B;
+  box-shadow:0 6px 30px rgba(111,231,255,.3)}
+.btn-primary:disabled{opacity:.4;box-shadow:none}
+.btn-ghost{background:var(--panel);border:1px solid var(--panel-border);color:var(--text);
+  font-weight:500;font-size:.9rem;padding:13px 20px}
+.btn svg{width:20px;height:20px}
+input[type=file]{display:none}
+.home-actions{display:flex;flex-direction:column;gap:10px}
+
+.screen{display:none}
+.screen.active{display:block;animation:fadeUp .35s ease}
+@keyframes fadeUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion:reduce){.screen.active{animation:none}}
+
+.photo-box{position:relative;border-radius:var(--radius);overflow:hidden;
+  border:1px solid var(--panel-border);margin-bottom:16px;background:#0B121C}
+.photo-box img{display:block;width:100%;max-height:38vh;object-fit:cover}
+.scan-overlay{position:absolute;inset:0;pointer-events:none}
+.scan-beam{position:absolute;left:0;right:0;height:26%;
+  background:linear-gradient(to bottom, transparent, rgba(111,231,255,.22) 70%, rgba(111,231,255,.85));
+  border-bottom:2px solid var(--frost);
+  animation:scan 2.1s ease-in-out infinite;filter:drop-shadow(0 0 12px var(--frost-dim))}
+@keyframes scan{0%,100%{top:-26%}50%{top:100%}}
+@media (prefers-reduced-motion:reduce){.scan-beam{animation:scan 4s linear infinite}}
+.scan-status{display:flex;align-items:center;gap:10px;justify-content:center;
+  font-family:'JetBrains Mono',monospace;font-size:.7rem;letter-spacing:.12em;
+  text-transform:uppercase;color:var(--frost);margin-bottom:18px}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--frost);animation:pulse 1s ease-in-out infinite}
+@keyframes pulse{50%{opacity:.25}}
+
+.section-label{font-family:'JetBrains Mono',monospace;font-size:.66rem;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--text-dim);margin:22px 0 12px;display:flex;align-items:center;gap:10px}
+.section-label::after{content:"";flex:1;height:1px;background:var(--panel-border)}
+.section-label .count{color:var(--frost)}
+
+.group-title{font-family:'JetBrains Mono',monospace;font-size:.6rem;letter-spacing:.14em;
+  text-transform:uppercase;color:rgba(143,163,174,.7);margin:14px 0 8px}
+.chips{display:flex;flex-wrap:wrap;gap:8px}
+.chip{padding:8px 15px;border-radius:999px;font-size:.85rem;font-weight:500;cursor:pointer;
+  background:rgba(255,255,255,.04);border:1px solid rgba(140,220,255,.12);color:var(--text-dim);
+  transition:all .15s ease;user-select:none;-webkit-user-select:none}
+.chip.on{background:rgba(111,231,255,.12);border-color:rgba(111,231,255,.45);color:#C9F4FF}
+.chip.detected::before{content:"◉ ";color:var(--frost);font-size:.7em}
+.chip:active{transform:scale(.94)}
+
+.sticky-cta{position:sticky;bottom:0;margin-top:24px;z-index:5;
+  padding:18px 0 calc(14px + var(--safe-b));
+  background:linear-gradient(to top, var(--ink) 62%, rgba(7,11,18,0));}
+.sticky-cta .btn:disabled{background:rgba(255,255,255,.07);color:var(--text-dim);opacity:1}
+
+.recipe{border-radius:var(--radius);border:1px solid var(--panel-border);
+  background:rgba(10,16,26,.92);margin-bottom:14px;overflow:hidden;
+  animation:fadeUp .4s ease both;backdrop-filter:blur(8px)}
+.recipe-head{padding:17px 17px 14px;cursor:pointer;user-select:none;-webkit-user-select:none}
+.recipe-kind{font-family:'JetBrains Mono',monospace;font-size:.62rem;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--amber);margin-bottom:7px;display:flex;justify-content:space-between}
+.match-badge{color:var(--frost)}
+.recipe-title{font-family:'Space Grotesk',sans-serif;font-size:1.15rem;font-weight:700;
+  letter-spacing:-.01em;line-height:1.25;margin-bottom:10px;display:flex;justify-content:space-between;gap:12px}
+.recipe-title .arrow{flex-shrink:0;transition:transform .25s ease;color:var(--text-dim);font-weight:400}
+.recipe.open .arrow{transform:rotate(90deg)}
+.meta{display:flex;gap:8px;flex-wrap:wrap}
+.meta span{font-family:'JetBrains Mono',monospace;font-size:.66rem;padding:5px 10px;border-radius:8px;
+  background:rgba(255,179,92,.08);border:1px solid rgba(255,179,92,.22);color:#FFCE94}
+.recipe-body{display:none;padding:0 17px 18px;border-top:1px solid var(--panel-border)}
+.recipe.open .recipe-body{display:block}
+.recipe-body h4{font-family:'JetBrains Mono',monospace;font-size:.64rem;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--text-dim);margin:15px 0 8px}
+.recipe-body ul,.recipe-body ol{padding-left:20px;font-size:.88rem;line-height:1.6}
+.recipe-body li{margin-bottom:5px}
+.recipe-body li::marker{color:var(--frost)}
+.missing li::marker,.missing{color:var(--amber)}
+.pantry li::marker{color:var(--text-dim)}
+.pantry{color:var(--text-dim)}
+
+.notice{border-radius:14px;border:1px solid var(--panel-border);background:var(--panel);
+  padding:12px 15px;font-size:.8rem;line-height:1.5;color:var(--text-dim);margin-bottom:16px}
+.notice b{color:var(--frost);font-weight:600}
+.actions{display:flex;flex-direction:column;gap:10px;margin-top:20px}
+.empty{ text-align:center;color:var(--text-dim);font-size:.9rem;padding:26px 10px;line-height:1.6}
+footer{margin-top:36px;text-align:center;font-family:'JetBrains Mono',monospace;
+  font-size:.6rem;letter-spacing:.12em;color:rgba(143,163,174,.5);text-transform:uppercase;line-height:1.8}
+</style>
+</head>
+<body>
+<div class="bg"></div>
+<div class="wrap">
+
+<header>
+  <div class="logo">
+    <svg viewBox="0 0 24 24" fill="none" stroke="#6FE7FF" stroke-width="1.6" stroke-linecap="round">
+      <rect x="6" y="2.5" width="12" height="19" rx="2.5"/>
+      <line x1="6" y1="10" x2="18" y2="10"/>
+      <line x1="9" y1="5.5" x2="9" y2="7.5"/>
+      <line x1="9" y1="13" x2="9" y2="16"/>
+    </svg>
+  </div>
+  <div>
+    <h1>Frigo<span>Chef</span></h1>
+    <div class="tagline">50 recettes · 100 % gratuit · sans compte</div>
+  </div>
+</header>
+
+<!-- ÉCRAN 1 : ACCUEIL -->
+<div class="screen active" id="screen-home">
+  <div class="hero">
+    <div class="fridge-frame">
+      <span class="corner tl"></span><span class="corner tr"></span>
+      <span class="corner bl"></span><span class="corner br"></span>
+      <div class="idle-beam"></div>
+      <svg viewBox="0 0 24 24" fill="none" stroke="#6FE7FF" stroke-width="1.1" stroke-linecap="round">
+        <rect x="6" y="2.5" width="12" height="19" rx="2.5"/>
+        <line x1="6" y1="10" x2="18" y2="10"/>
+        <line x1="9" y1="5.5" x2="9" y2="7.5"/>
+        <line x1="9" y1="13" x2="9" y2="16"/>
+      </svg>
+    </div>
+    <h2>Photographiez votre frigo.<br><em>Cuisinez ce que vous avez.</em></h2>
+    <p>La photo pré-détecte certains ingrédients, vous complétez en deux tapotements, et FrigoChef trouve les meilleures recettes parmi 50 classiques variés.</p>
+    <div class="home-actions">
+      <button class="btn btn-primary" id="btn-scan">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+          <circle cx="12" cy="13" r="4"/>
+        </svg>
+        Scanner mon frigo
+      </button>
+      <button class="btn btn-ghost" id="btn-library">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="3" width="18" height="18" rx="2"/>
+          <circle cx="8.5" cy="8.5" r="1.5"/>
+          <path d="M21 15l-5-5L5 21"/>
+        </svg>
+        Charger une photo existante
+      </button>
+      <button class="btn btn-ghost" id="btn-manual">Choisir mes ingrédients sans photo</button>
+    </div>
+  </div>
+  <input type="file" id="file-input" accept="image/*" capture="environment">
+  <input type="file" id="library-input" accept="image/*">
+</div>
+
+<!-- ÉCRAN 2 : SÉLECTION DES INGRÉDIENTS -->
+<div class="screen" id="screen-select">
+  <div class="photo-box" id="photo-box" style="display:none">
+    <img id="photo" alt="Photo du frigo">
+    <div class="scan-overlay" id="scan-overlay"><div class="scan-beam"></div></div>
+  </div>
+  <div class="scan-status" id="scan-status" style="display:none">
+    <span class="dot"></span><span id="status-text">Détection en cours…</span>
+  </div>
+  <div class="notice" id="detect-notice" style="display:none"></div>
+  <div class="section-label">Vos ingrédients <span class="count" id="sel-count"></span></div>
+  <div id="ingredient-grid"></div>
+  <div class="sticky-cta">
+    <button class="btn btn-primary" id="btn-find" disabled>Trouver mes recettes</button>
+  </div>
+</div>
+
+<!-- ÉCRAN 3 : RECETTES -->
+<div class="screen" id="screen-recipes">
+  <div class="section-label">Vos recettes <span class="count" id="page-info"></span></div>
+  <div id="results"></div>
+  <div class="actions">
+    <button class="btn btn-ghost" id="btn-more" style="display:none">3 autres recettes</button>
+    <button class="btn btn-ghost" id="btn-edit">Modifier mes ingrédients</button>
+    <button class="btn btn-primary" id="btn-rescan">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+        <circle cx="12" cy="13" r="4"/>
+      </svg>
+      Nouvelle photo
+    </button>
+  </div>
+</div>
+
+<footer>FrigoChef · Tout fonctionne dans votre navigateur<br>Aucune image envoyée · Aucun compte requis</footer>
+</div>
+
+<script>
+(function(){
+"use strict";
+
+/* ═══ VOCABULAIRE D'INGRÉDIENTS ═══ */
+var GROUPS = [
+ {g:"Légumes", items:["tomate","salade","carotte","courgette","poivron","oignon","ail","champignon","brocoli","épinards","pomme de terre","concombre","aubergine","poireau","chou-fleur","avocat","maïs","petits pois","haricots verts"]},
+ {g:"Fruits", items:["pomme","banane","orange","citron","melon","fraise","framboise","poire"]},
+ {g:"Viandes & poissons", items:["œufs","poulet","bœuf haché","steak","jambon","lardons","saucisse","saumon","poisson blanc","thon","crevettes"]},
+ {g:"Produits laitiers", items:["lait","beurre","crème fraîche","yaourt","fromage râpé","emmental","mozzarella","chèvre","feta","parmesan"]},
+ {g:"Divers", items:["pâte feuilletée","pâte brisée","pesto","moutarde","olives","restes de riz","restes de pâtes"]}
+];
+
+/* ═══ BASE DE 50 RECETTES ═══
+   n=nom t=type tm=temps d=difficulté p=personnes
+   i=ingrédients frigo (tags) pl=placard e=étapes */
+var RECIPES = [
+{n:"Omelette au fromage",t:"Express",tm:"10 min",d:"Facile",p:2,i:["œufs","fromage râpé","beurre"],pl:["sel, poivre"],e:["Battre 4 œufs avec sel et poivre.","Faire fondre le beurre dans une poêle chaude.","Verser les œufs, parsemer de fromage râpé.","Replier l'omelette quand elle est baveuse et servir."]},
+{n:"Omelette champignons-jambon",t:"Express",tm:"15 min",d:"Facile",p:2,i:["œufs","champignon","jambon"],pl:["huile, sel, poivre"],e:["Émincer et faire dorer les champignons 5 min.","Ajouter le jambon en lamelles.","Verser 4 œufs battus assaisonnés.","Cuire 3 min et replier l'omelette."]},
+{n:"Quiche lorraine",t:"Plat classique",tm:"45 min",d:"Facile",p:4,i:["pâte brisée","œufs","lardons","crème fraîche","fromage râpé"],pl:["sel, poivre, muscade"],e:["Préchauffer le four à 180 °C, foncer un moule avec la pâte.","Faire revenir 200 g de lardons sans matière grasse.","Mélanger 3 œufs, 20 cl de crème, muscade, poivre.","Répartir lardons et fromage sur la pâte, verser l'appareil.","Cuire 35 min jusqu'à belle dorure."]},
+{n:"Quiche courgette-chèvre",t:"Végétarien",tm:"50 min",d:"Facile",p:4,i:["pâte brisée","œufs","courgette","chèvre","crème fraîche"],pl:["huile, sel, poivre"],e:["Faire revenir 1 courgette en rondelles 8 min.","Foncer le moule, répartir courgettes et chèvre en dés.","Verser 3 œufs battus avec 20 cl de crème.","Cuire 35 min à 180 °C."]},
+{n:"Croque-monsieur maison",t:"Express",tm:"15 min",d:"Facile",p:2,i:["jambon","emmental","beurre"],pl:["pain de mie"],e:["Beurrer 4 tranches de pain de mie.","Garnir de jambon et d'emmental.","Refermer et dorer 4 min par face à la poêle ou au four gril.","Servir bien chaud avec une salade."]},
+{n:"Gratin de pâtes au jambon",t:"Plat classique",tm:"30 min",d:"Facile",p:4,i:["jambon","fromage râpé","crème fraîche"],pl:["pâtes, sel, poivre"],e:["Cuire 300 g de pâtes al dente.","Mélanger avec le jambon en dés et 20 cl de crème.","Verser dans un plat, couvrir de fromage râpé.","Gratiner 15 min à 200 °C."]},
+{n:"Gratin dauphinois",t:"Plat classique",tm:"1 h 15",d:"Moyen",p:4,i:["pomme de terre","crème fraîche","lait","ail"],pl:["sel, poivre, muscade"],e:["Émincer 1 kg de pommes de terre en fines lamelles.","Frotter le plat à l'ail, disposer les lamelles en couches.","Verser 25 cl de lait + 25 cl de crème assaisonnés.","Cuire 1 h à 160 °C jusqu'à tendreté."]},
+{n:"Salade César au poulet",t:"Express",tm:"20 min",d:"Facile",p:2,i:["salade","poulet","parmesan","œufs"],pl:["pain, huile, moutarde, ail"],e:["Griller le poulet en lanières et des croûtons de pain.","Préparer une sauce : jaune d'œuf, moutarde, huile, ail, parmesan.","Mélanger la salade, le poulet et les croûtons.","Napper de sauce et parsemer de copeaux de parmesan."]},
+{n:"Salade grecque",t:"Express",tm:"10 min",d:"Facile",p:2,i:["tomate","concombre","feta","olives","oignon"],pl:["huile d'olive, origan"],e:["Couper tomates et concombre en morceaux.","Émincer finement l'oignon.","Ajouter olives et feta en dés.","Arroser d'huile d'olive et saupoudrer d'origan."]},
+{n:"Pâtes à la carbonara",t:"Plat classique",tm:"20 min",d:"Facile",p:2,i:["lardons","œufs","parmesan"],pl:["pâtes, poivre"],e:["Cuire 250 g de spaghetti al dente.","Dorer 150 g de lardons à sec.","Mélanger 2 jaunes d'œufs avec 50 g de parmesan et du poivre.","Hors du feu, mêler pâtes, lardons et sauce avec un peu d'eau de cuisson."]},
+{n:"Pâtes pesto-tomates cerises",t:"Végétarien",tm:"15 min",d:"Facile",p:2,i:["pesto","tomate","parmesan"],pl:["pâtes"],e:["Cuire 250 g de pâtes al dente.","Couper les tomates cerises en deux.","Mélanger pâtes, 3 c. à s. de pesto et tomates.","Servir avec du parmesan râpé."]},
+{n:"Spaghetti bolognaise express",t:"Plat classique",tm:"30 min",d:"Facile",p:4,i:["bœuf haché","tomate","oignon","ail"],pl:["pâtes, huile, herbes"],e:["Faire revenir oignon et ail émincés.","Ajouter 400 g de bœuf haché, faire dorer.","Incorporer les tomates concassées, mijoter 15 min avec les herbes.","Servir sur des spaghetti al dente."]},
+{n:"Risotto aux champignons",t:"Plat classique",tm:"35 min",d:"Moyen",p:2,i:["champignon","parmesan","beurre","oignon"],pl:["riz arborio, bouillon"],e:["Faire suer l'oignon dans le beurre, ajouter 200 g de riz.","Nacrer 2 min puis mouiller au bouillon louche par louche.","Poêler les champignons à part et les incorporer.","Finir avec beurre et parmesan, servir crémeux."]},
+{n:"Riz sauté façon cantonais",t:"Cuisine du monde",tm:"15 min",d:"Facile",p:2,i:["restes de riz","œufs","jambon","petits pois"],pl:["sauce soja, huile"],e:["Brouiller 2 œufs dans un wok huilé, réserver.","Sauter le riz froid à feu vif 3 min.","Ajouter jambon en dés, petits pois et œufs.","Assaisonner de sauce soja et servir."]},
+{n:"Curry de poulet crémeux",t:"Cuisine du monde",tm:"30 min",d:"Facile",p:4,i:["poulet","crème fraîche","oignon"],pl:["riz, curry, huile"],e:["Dorer le poulet en morceaux avec l'oignon émincé.","Saupoudrer de 2 c. à s. de curry, remuer 1 min.","Verser 20 cl de crème, mijoter 15 min.","Servir avec du riz basmati."]},
+{n:"Poulet rôti aux pommes de terre",t:"Plat classique",tm:"1 h 15",d:"Facile",p:4,i:["poulet","pomme de terre","ail"],pl:["huile, thym, sel"],e:["Préchauffer le four à 200 °C.","Disposer le poulet avec les pommes de terre en quartiers et l'ail.","Arroser d'huile, saler, parsemer de thym.","Rôtir 1 h en arrosant régulièrement."]},
+{n:"Wok de bœuf aux poivrons",t:"Cuisine du monde",tm:"20 min",d:"Facile",p:2,i:["steak","poivron","oignon"],pl:["sauce soja, riz, huile"],e:["Émincer le bœuf, le poivron et l'oignon.","Saisir le bœuf 2 min à feu très vif, réserver.","Sauter les légumes 5 min, remettre le bœuf.","Déglacer à la sauce soja, servir avec du riz."]},
+{n:"Tacos au bœuf haché",t:"Cuisine du monde",tm:"25 min",d:"Facile",p:4,i:["bœuf haché","tomate","salade","fromage râpé","avocat"],pl:["tortillas, épices mexicaines"],e:["Faire revenir le bœuf avec les épices 8 min.","Couper tomate et avocat en dés, ciseler la salade.","Réchauffer les tortillas.","Garnir chaque tortilla de viande, crudités et fromage."]},
+{n:"Chili con carne",t:"Cuisine du monde",tm:"45 min",d:"Facile",p:4,i:["bœuf haché","oignon","ail","maïs"],pl:["haricots rouges, tomates en boîte, cumin"],e:["Faire revenir oignon et ail, ajouter le bœuf.","Incorporer tomates, haricots rouges égouttés et maïs.","Épicer au cumin et piment, mijoter 30 min.","Servir avec du riz."]},
+{n:"Hachis parmentier",t:"Plat classique",tm:"50 min",d:"Moyen",p:4,i:["bœuf haché","pomme de terre","beurre","lait","fromage râpé"],pl:["sel, poivre, muscade"],e:["Cuire 800 g de pommes de terre et les écraser avec beurre et lait.","Faire revenir le bœuf haché avec assaisonnement.","Monter en couches : viande puis purée.","Couvrir de fromage et gratiner 20 min à 200 °C."]},
+{n:"Saumon au four, légumes rôtis",t:"Plat classique",tm:"30 min",d:"Facile",p:2,i:["saumon","courgette","tomate","citron"],pl:["huile d'olive, herbes"],e:["Préchauffer le four à 200 °C.","Disposer pavés de saumon, courgette en rondelles et tomates.","Arroser d'huile et de jus de citron, parsemer d'herbes.","Cuire 20 min."]},
+{n:"Papillote de poisson au citron",t:"Express",tm:"25 min",d:"Facile",p:2,i:["poisson blanc","citron","courgette"],pl:["huile d'olive, herbes"],e:["Poser chaque filet sur du papier cuisson.","Ajouter courgette en fines rondelles et citron en tranches.","Arroser d'huile, fermer les papillotes.","Cuire 18 min à 200 °C."]},
+{n:"Pâtes au thon et à la tomate",t:"Express",tm:"20 min",d:"Facile",p:2,i:["thon","tomate","oignon"],pl:["pâtes, huile"],e:["Faire revenir l'oignon émincé.","Ajouter les tomates en dés, cuire 8 min.","Incorporer le thon émietté.","Mélanger aux pâtes cuites al dente."]},
+{n:"Salade de riz au thon",t:"Express",tm:"15 min",d:"Facile",p:2,i:["restes de riz","thon","maïs","tomate","œufs"],pl:["huile, vinaigre, moutarde"],e:["Cuire 2 œufs durs (9 min) et les couper en quartiers.","Mélanger riz froid, thon émietté, maïs et tomates en dés.","Préparer une vinaigrette moutardée.","Assaisonner et servir frais."]},
+{n:"Crevettes sautées à l'ail",t:"Express",tm:"12 min",d:"Facile",p:2,i:["crevettes","ail","beurre","citron"],pl:["riz, persil"],e:["Faire fondre le beurre avec l'ail haché.","Saisir les crevettes 2 min par face.","Déglacer au jus de citron, parsemer de persil.","Servir avec du riz."]},
+{n:"Soupe de légumes maison",t:"Végétarien",tm:"35 min",d:"Facile",p:4,i:["carotte","poireau","pomme de terre","oignon"],pl:["sel, poivre, bouillon"],e:["Couper tous les légumes en morceaux.","Faire suer l'oignon puis ajouter le reste.","Couvrir d'eau ou de bouillon, cuire 25 min.","Mixer et rectifier l'assaisonnement."]},
+{n:"Velouté de brocoli",t:"Végétarien",tm:"25 min",d:"Facile",p:4,i:["brocoli","crème fraîche","oignon"],pl:["bouillon, sel, poivre"],e:["Faire revenir l'oignon émincé.","Ajouter le brocoli en bouquets et couvrir de bouillon.","Cuire 15 min puis mixer finement.","Incorporer 2 c. à s. de crème et servir."]},
+{n:"Ratatouille",t:"Végétarien",tm:"50 min",d:"Facile",p:4,i:["courgette","aubergine","poivron","tomate","oignon","ail"],pl:["huile d'olive, thym"],e:["Couper tous les légumes en dés réguliers.","Faire revenir séparément aubergine puis courgette et poivron.","Réunir avec tomates, oignon, ail et thym.","Mijoter 30 min à feu doux."]},
+{n:"Tarte tomate-moutarde",t:"Végétarien",tm:"40 min",d:"Facile",p:4,i:["pâte feuilletée","tomate","moutarde","emmental"],pl:["herbes de Provence"],e:["Étaler la pâte et la tartiner de moutarde.","Couvrir d'emmental râpé puis de tomates en rondelles.","Saupoudrer d'herbes de Provence.","Cuire 30 min à 190 °C."]},
+{n:"Tarte fine chèvre-épinards",t:"Végétarien",tm:"35 min",d:"Facile",p:4,i:["pâte feuilletée","chèvre","épinards"],pl:["huile, miel (option)"],e:["Faire tomber les épinards à la poêle 3 min.","Étaler la pâte, répartir épinards et chèvre en rondelles.","Ajouter un filet de miel si désiré.","Cuire 25 min à 190 °C."]},
+{n:"Pizza-tortilla express",t:"Express",tm:"15 min",d:"Facile",p:2,i:["tomate","mozzarella","jambon","olives"],pl:["tortillas, origan"],e:["Tartiner les tortillas de tomate écrasée.","Garnir de mozzarella, jambon et olives.","Enfourner 8 min à 220 °C sur une plaque chaude.","Saupoudrer d'origan et servir."]},
+{n:"Frittata aux légumes",t:"Végétarien",tm:"25 min",d:"Facile",p:2,i:["œufs","courgette","poivron","oignon","fromage râpé"],pl:["huile, sel, poivre"],e:["Faire revenir les légumes émincés 8 min.","Verser 5 œufs battus avec le fromage.","Cuire à feu doux 8 min puis finir sous le gril.","Servir en parts, chaud ou froid."]},
+{n:"Shakshuka",t:"Cuisine du monde",tm:"25 min",d:"Facile",p:2,i:["œufs","tomate","poivron","oignon","ail"],pl:["cumin, paprika, huile"],e:["Faire revenir oignon, ail et poivron émincés.","Ajouter les tomates concassées et les épices, mijoter 10 min.","Creuser des puits et y casser les œufs.","Couvrir 5 min jusqu'à ce que les blancs prennent."]},
+{n:"Œufs cocotte au jambon",t:"Express",tm:"15 min",d:"Facile",p:2,i:["œufs","crème fraîche","jambon"],pl:["sel, poivre"],e:["Beurrer 2 ramequins, y déposer le jambon en dés.","Ajouter 1 c. à s. de crème et casser un œuf dans chaque.","Cuire au bain-marie 10 min à 180 °C.","Le blanc doit être pris, le jaune coulant."]},
+{n:"Tortilla espagnole",t:"Cuisine du monde",tm:"35 min",d:"Moyen",p:4,i:["œufs","pomme de terre","oignon"],pl:["huile d'olive, sel"],e:["Faire confire pommes de terre et oignon émincés dans l'huile 15 min.","Égoutter et mélanger à 6 œufs battus.","Cuire à feu doux 8 min, retourner à l'assiette.","Cuire l'autre face 4 min, servir tiède."]},
+{n:"Salade caprese",t:"Express",tm:"8 min",d:"Facile",p:2,i:["tomate","mozzarella"],pl:["basilic, huile d'olive, sel"],e:["Trancher tomates et mozzarella.","Alterner les tranches sur un plat.","Parsemer de basilic frais.","Arroser d'huile d'olive et saler."]},
+{n:"Wrap poulet-avocat",t:"Express",tm:"15 min",d:"Facile",p:2,i:["poulet","avocat","salade","tomate"],pl:["tortillas, sauce au choix"],e:["Griller le poulet en lanières.","Écraser l'avocat et le tartiner sur les tortillas.","Ajouter salade, tomate et poulet.","Rouler serré et couper en deux."]},
+{n:"Buddha bowl du frigo",t:"Végétarien",tm:"20 min",d:"Facile",p:2,i:["restes de riz","avocat","carotte","concombre","œufs"],pl:["sauce soja ou vinaigrette"],e:["Cuire 2 œufs mollets (6 min).","Râper la carotte, trancher concombre et avocat.","Disposer chaque élément sur le riz en sections.","Napper de sauce et servir."]},
+{n:"Poêlée campagnarde",t:"Plat classique",tm:"30 min",d:"Facile",p:2,i:["pomme de terre","lardons","oignon","champignon"],pl:["huile, persil"],e:["Précuire les pommes de terre en dés 10 min à l'eau.","Dorer les lardons avec l'oignon.","Ajouter pommes de terre et champignons, sauter 12 min.","Parsemer de persil et servir."]},
+{n:"Flammekueche express",t:"Cuisine du monde",tm:"25 min",d:"Facile",p:4,i:["pâte brisée","crème fraîche","lardons","oignon"],pl:["poivre, muscade"],e:["Étaler la pâte très finement.","Tartiner de crème assaisonnée de muscade.","Répartir lardons et oignon émincé cru.","Cuire 15 min à 240 °C, la pâte doit croustiller."]},
+{n:"Gratin de chou-fleur",t:"Végétarien",tm:"40 min",d:"Moyen",p:4,i:["chou-fleur","lait","beurre","fromage râpé"],pl:["farine, muscade"],e:["Cuire le chou-fleur en bouquets 10 min à l'eau.","Préparer une béchamel : beurre, farine, lait, muscade.","Napper le chou-fleur dans un plat.","Couvrir de fromage, gratiner 20 min à 200 °C."]},
+{n:"Fondue de poireaux au saumon",t:"Plat classique",tm:"30 min",d:"Facile",p:2,i:["poireau","saumon","crème fraîche"],pl:["pâtes ou riz, beurre"],e:["Émincer les poireaux et les faire fondre au beurre 15 min.","Ajouter 15 cl de crème, laisser épaissir.","Poêler le saumon en dés 3 min.","Réunir et servir sur pâtes ou riz."]},
+{n:"Nouilles sautées aux légumes",t:"Cuisine du monde",tm:"20 min",d:"Facile",p:2,i:["restes de pâtes","carotte","poivron","œufs"],pl:["sauce soja, huile"],e:["Émincer carotte et poivron en julienne.","Les sauter 5 min à feu vif au wok.","Pousser sur le côté, brouiller les œufs.","Ajouter les pâtes et la sauce soja, sauter 3 min."]},
+{n:"Curry de légumes",t:"Végétarien",tm:"35 min",d:"Facile",p:4,i:["courgette","carotte","pomme de terre","oignon"],pl:["curry, riz, crème ou lait de coco"],e:["Faire revenir l'oignon avec 2 c. à s. de curry.","Ajouter les légumes en morceaux.","Mouiller à hauteur, mijoter 20 min.","Crémer en fin de cuisson, servir avec du riz."]},
+{n:"Haricots verts persillés aux lardons",t:"Express",tm:"20 min",d:"Facile",p:2,i:["haricots verts","lardons","ail"],pl:["persil, beurre"],e:["Cuire les haricots 8 min à l'eau bouillante salée.","Dorer les lardons avec l'ail haché.","Ajouter les haricots égouttés, sauter 3 min.","Parsemer de persil."]},
+{n:"Crumble aux pommes",t:"Dessert",tm:"40 min",d:"Facile",p:4,i:["pomme","beurre"],pl:["farine, sucre"],e:["Couper 4 pommes en dés dans un plat beurré.","Sabler 100 g de farine, 80 g de beurre, 80 g de sucre.","Émietter sur les pommes.","Cuire 30 min à 180 °C jusqu'à dorure."]},
+{n:"Banana bread",t:"Dessert",tm:"55 min",d:"Facile",p:6,i:["banane","œufs","beurre"],pl:["farine, sucre, levure"],e:["Écraser 3 bananes bien mûres.","Mélanger avec 2 œufs, 80 g de beurre fondu, 100 g de sucre.","Incorporer 200 g de farine et la levure.","Cuire 45 min à 180 °C dans un moule à cake."]},
+{n:"Salade de fruits frais",t:"Dessert",tm:"15 min",d:"Facile",p:4,i:["melon","fraise","banane","orange","citron"],pl:["sucre ou miel (option)"],e:["Couper tous les fruits en morceaux réguliers.","Presser l'orange et le citron sur les fruits.","Sucrer légèrement si besoin.","Réserver 30 min au frais avant de servir."]},
+{n:"Coupe yaourt-fruits rouges",t:"Dessert",tm:"5 min",d:"Facile",p:2,i:["yaourt","fraise","framboise"],pl:["miel, granola (option)"],e:["Couper les fraises en morceaux.","Alterner couches de yaourt et de fruits dans des verrines.","Arroser d'un filet de miel.","Ajouter du granola pour le croquant."]},
+{n:"Clafoutis aux fruits",t:"Dessert",tm:"45 min",d:"Facile",p:4,i:["œufs","lait","poire"],pl:["farine, sucre, beurre"],e:["Disposer les fruits en morceaux dans un plat beurré.","Fouetter 3 œufs, 80 g de sucre, 60 g de farine, 25 cl de lait.","Verser sur les fruits.","Cuire 35 min à 180 °C."]},
+{n:"Pancakes moelleux",t:"Dessert",tm:"20 min",d:"Facile",p:4,i:["œufs","lait","beurre"],pl:["farine, sucre, levure"],e:["Mélanger 200 g de farine, 2 c. à s. de sucre et la levure.","Ajouter 2 œufs et 25 cl de lait, fouetter.","Cuire des petits ronds de pâte à la poêle beurrée.","Retourner aux premières bulles, servir chaud."]}
+];
+
+/* ═══ DÉTECTION AUTO (TensorFlow.js COCO-SSD, dans le navigateur) ═══ */
+var COCO_MAP = {banana:"banane",apple:"pomme",orange:"orange",broccoli:"brocoli",carrot:"carotte"};
+var model = null;
+
+function loadScript(src){
+  return new Promise(function(res,rej){
+    var s=document.createElement('script');
+    s.src=src; s.onload=res; s.onerror=function(){rej(new Error('CDN indisponible'));};
+    document.head.appendChild(s);
+  });
+}
+function loadModel(){
+  if(model) return Promise.resolve(model);
+  return loadScript('https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js')
+    .then(function(){return loadScript('https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js');})
+    .then(function(){return cocoSsd.load({base:'lite_mobilenet_v2'});})
+    .then(function(m){model=m; return m;});
+}
+
+/* ═══ ÉTAT & DOM ═══ */
+var selected = {};
+var matches = [];
+var page = 0;
+
+var fileInput=document.getElementById('file-input'),
+    libraryInput=document.getElementById('library-input'),
+    photoEl=document.getElementById('photo'),
+    photoBox=document.getElementById('photo-box'),
+    overlay=document.getElementById('scan-overlay'),
+    statusRow=document.getElementById('scan-status'),
+    statusText=document.getElementById('status-text'),
+    detectNotice=document.getElementById('detect-notice'),
+    grid=document.getElementById('ingredient-grid'),
+    selCount=document.getElementById('sel-count'),
+    btnFind=document.getElementById('btn-find'),
+    results=document.getElementById('results'),
+    pageInfo=document.getElementById('page-info'),
+    btnMore=document.getElementById('btn-more');
+
+function show(id){
+  document.querySelectorAll('.screen').forEach(function(s){s.classList.remove('active');});
+  document.getElementById(id).classList.add('active');
+  window.scrollTo(0,0);
+}
+function esc(s){var d=document.createElement('div');d.textContent=String(s==null?'':s);return d.innerHTML;}
+
+/* ═══ GRILLE D'INGRÉDIENTS ═══ */
+function buildGrid(){
+  var html='';
+  GROUPS.forEach(function(gr){
+    html+='<div class="group-title">'+esc(gr.g)+'</div><div class="chips">';
+    gr.items.forEach(function(it){
+      html+='<span class="chip'+(selected[it]?' on':'')+(selected[it]==='auto'?' detected':'')+'" data-ing="'+esc(it)+'">'+esc(it)+'</span>';
+    });
+    html+='</div>';
+  });
+  grid.innerHTML=html;
+  grid.querySelectorAll('.chip').forEach(function(ch){
+    ch.addEventListener('click',function(){
+      var k=ch.getAttribute('data-ing');
+      if(selected[k]){delete selected[k];ch.classList.remove('on','detected');}
+      else{selected[k]=true;ch.classList.add('on');}
+      updateCount();
+    });
+  });
+  updateCount();
+}
+function updateCount(){
+  var n=Object.keys(selected).length;
+  selCount.textContent=n?('· '+n+' sélectionné'+(n>1?'s':'')):'';
+  btnFind.disabled=n<1;
+  btnFind.textContent=n<1?'Sélectionnez vos ingrédients':'Trouver mes recettes ('+n+')';
+}
+
+/* ═══ NAVIGATION ═══ */
+document.getElementById('btn-scan').addEventListener('click',function(){fileInput.click();});
+document.getElementById('btn-library').addEventListener('click',function(){libraryInput.click();});
+document.getElementById('btn-manual').addEventListener('click',function(){
+  photoBox.style.display='none';statusRow.style.display='none';detectNotice.style.display='none';
+  buildGrid();show('screen-select');
+});
+document.getElementById('btn-rescan').addEventListener('click',function(){fileInput.value='';fileInput.click();});
+document.getElementById('btn-edit').addEventListener('click',function(){buildGrid();show('screen-select');});
+
+function handleFile(input){
+  var f=input.files&&input.files[0];
+  if(!f)return;
+  var reader=new FileReader();
+  reader.onload=function(e){
+    var img=new Image();
+    img.onload=function(){
+      var max=800,w=img.width,h=img.height;
+      if(Math.max(w,h)>max){var r=max/Math.max(w,h);w=Math.round(w*r);h=Math.round(h*r);}
+      var c=document.createElement('canvas');c.width=w;c.height=h;
+      c.getContext('2d').drawImage(img,0,0,w,h);
+      photoEl.src=c.toDataURL('image/jpeg',0.8);
+      selected={};
+      buildGrid();
+      photoBox.style.display='block';overlay.style.display='block';
+      statusRow.style.display='flex';statusText.textContent='Détection en cours…';
+      detectNotice.style.display='none';
+      show('screen-select');
+      runDetection(c);
+    };
+    img.src=e.target.result;
+  };
+  reader.readAsDataURL(f);
+}
+fileInput.addEventListener('change',function(){handleFile(fileInput);});
+libraryInput.addEventListener('change',function(){handleFile(libraryInput);});
+
+function runDetection(canvas){
+  var timeout=new Promise(function(_,rej){setTimeout(function(){rej(new Error('timeout'));},20000);});
+  Promise.race([loadModel().then(function(m){return m.detect(canvas);}),timeout])
+  .then(function(preds){
+    var found={};
+    (preds||[]).forEach(function(p){
+      var fr=COCO_MAP[p.class];
+      if(fr&&p.score>0.35)found[fr]=true;
+    });
+    Object.keys(found).forEach(function(k){selected[k]='auto';});
+    buildGrid();
+    finishDetect(Object.keys(found));
+  })
+  .catch(function(){finishDetect(null);});
+}
+function finishDetect(found){
+  overlay.style.display='none';statusRow.style.display='none';
+  detectNotice.style.display='block';
+  if(found===null){
+    var inPreview = /claude|anthropic/i.test(location.hostname) || location.protocol === 'blob:';
+    detectNotice.innerHTML = inPreview
+      ? 'La détection auto est bloquée dans cet aperçu — elle fonctionnera sur le site déployé. <b>Sélectionnez vos ingrédients ci-dessous</b>, tout le reste marche.'
+      : 'La détection automatique n\'a pas pu se lancer (connexion). <b>Sélectionnez vos ingrédients ci-dessous</b>, tout le reste fonctionne.';
+  }else if(found.length===0){
+    detectNotice.innerHTML='Aucun ingrédient reconnu automatiquement sur cette photo — c\'est fréquent avec les emballages et boîtes. <b>Tapotez vos ingrédients ci-dessous</b> (2 tapotements suffisent).';
+  }else{
+    detectNotice.innerHTML='<b>'+found.length+' ingrédient'+(found.length>1?'s':'')+' détecté'+(found.length>1?'s':'')+'</b> (marqués ◉). Complétez la sélection ci-dessous pour de meilleures recettes.';
+  }
+}
+
+/* ═══ MOTEUR DE RECETTES ═══ */
+btnFind.addEventListener('click',function(){
+  var have=Object.keys(selected);
+  matches=RECIPES.map(function(r){
+    var got=r.i.filter(function(t){return have.indexOf(t)>=0;});
+    var miss=r.i.filter(function(t){return have.indexOf(t)<0;});
+    return {r:r,got:got,miss:miss,score:got.length/r.i.length};
+  })
+  .filter(function(m){return m.got.length>=Math.min(2,m.r.i.length)&&m.score>=0.4;})
+  .sort(function(a,b){return b.score-a.score||b.got.length-a.got.length||a.miss.length-b.miss.length;});
+  page=0;
+  renderPage();
+  show('screen-recipes');
+});
+btnMore.addEventListener('click',function(){page++;renderPage();window.scrollTo(0,0);});
+
+function renderPage(){
+  var slice=matches.slice(page*3,page*3+3);
+  if(matches.length===0){
+    results.innerHTML='<div class="empty">Aucune recette ne correspond assez à cette sélection.<br>Ajoutez quelques ingrédients (œufs, fromage, tomate…) pour élargir les possibilités.</div>';
+    pageInfo.textContent='';btnMore.style.display='none';return;
+  }
+  if(slice.length===0){page=0;slice=matches.slice(0,3);}
+  pageInfo.textContent='· '+matches.length+' trouvée'+(matches.length>1?'s':'');
+  var html='';
+  slice.forEach(function(m,idx){
+    var r=m.r,pct=Math.round(m.score*100);
+    html+='<div class="recipe" style="animation-delay:'+(idx*120)+'ms">'+
+      '<div class="recipe-head">'+
+        '<div class="recipe-kind"><span>'+esc(r.t)+'</span><span class="match-badge">'+pct+' % de vos ingrédients</span></div>'+
+        '<div class="recipe-title"><span>'+esc(r.n)+'</span><span class="arrow">›</span></div>'+
+        '<div class="meta">'+
+          '<span>⏱ '+esc(r.tm)+'</span>'+
+          '<span>◆ '+esc(r.d)+'</span>'+
+          '<span>👤 '+r.p+' pers.</span>'+
+        '</div>'+
+      '</div>'+
+      '<div class="recipe-body">'+
+        '<h4>Vous avez</h4><ul>'+m.got.map(function(i){return '<li>'+esc(i)+'</li>';}).join('')+'</ul>'+
+        (m.miss.length?'<h4>Il vous manque</h4><ul class="missing">'+m.miss.map(function(i){return '<li>'+esc(i)+'</li>';}).join('')+'</ul>':'')+
+        (r.pl.length?'<h4>Placard</h4><ul class="pantry">'+r.pl.map(function(i){return '<li>'+esc(i)+'</li>';}).join('')+'</ul>':'')+
+        '<h4>Préparation</h4><ol>'+r.e.map(function(s){return '<li>'+esc(s)+'</li>';}).join('')+'</ol>'+
+      '</div>'+
+    '</div>';
+  });
+  results.innerHTML=html;
+  btnMore.style.display=matches.length>3?'flex':'none';
+  results.querySelectorAll('.recipe-head').forEach(function(head){
+    head.addEventListener('click',function(){head.parentElement.classList.toggle('open');});
+  });
+}
+
+})();
+</script>
+</body>
+</html>
