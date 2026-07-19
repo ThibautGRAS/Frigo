@@ -778,25 +778,45 @@ holoGrid.position.y=groundY+0.02;scene.add(holoGrid);
 /* ---- Cellules de verre par groupes de domaine ---- */
 /* Texture "glace givrée" partagée : variations de rugosité + veines */
 const iceRough=(function(){
-  const cv=document.createElement("canvas");cv.width=cv.height=256;
+  const cv=document.createElement("canvas");cv.width=cv.height=512;
   const x=cv.getContext("2d");
-  x.fillStyle="#5A5A5A";x.fillRect(0,0,256,256);
-  for(let i=0;i<800;i++){
-    const v=50+Math.random()*140;
-    x.fillStyle=`rgb(${v},${v},${v})`;
-    x.fillRect(Math.random()*256,Math.random()*256,1+Math.random()*6,1+Math.random()*6);
+  /* fond de rugosité moyen */
+  x.fillStyle="#6E6E6E";x.fillRect(0,0,512,512);
+  /* nappes diffuses (zones plus/moins polies) */
+  for(let i=0;i<26;i++){
+    const gx=Math.random()*512,gy=Math.random()*512,gr=40+Math.random()*130;
+    const g=x.createRadialGradient(gx,gy,0,gx,gy,gr);
+    const v=Math.random()<.5?30:210;
+    g.addColorStop(0,`rgba(${v},${v},${v},.5)`);g.addColorStop(1,"rgba(0,0,0,0)");
+    x.fillStyle=g;x.fillRect(0,0,512,512);
   }
-  x.strokeStyle="rgba(255,255,255,.3)";x.lineWidth=1;
-  for(let i=0;i<22;i++){
-    x.beginPath();
-    x.moveTo(Math.random()*256,Math.random()*256);
-    x.lineTo(Math.random()*256,Math.random()*256);
+  /* grain fin (givre) */
+  for(let i=0;i<2600;i++){
+    const v=40+Math.random()*180;
+    x.fillStyle=`rgba(${v},${v},${v},.5)`;
+    x.fillRect(Math.random()*512,Math.random()*512,1+Math.random()*4,1+Math.random()*4);
+  }
+  /* veines de glace ramifiées */
+  x.strokeStyle="rgba(255,255,255,.28)";
+  for(let i=0;i<40;i++){
+    x.lineWidth=.5+Math.random()*1.5;
+    let px=Math.random()*512,py=Math.random()*512;
+    x.beginPath();x.moveTo(px,py);
+    const seg=2+Math.floor(Math.random()*4);
+    for(let j=0;j<seg;j++){px+=(Math.random()-.5)*90;py+=(Math.random()-.5)*90;x.lineTo(px,py);}
     x.stroke();
   }
-  const t=new THREE.CanvasTexture(cv);
+  /* micro-bulles piégées */
+  for(let i=0;i<70;i++){
+    const r=1+Math.random()*3.5;
+    x.fillStyle="rgba(230,230,230,.4)";
+    x.beginPath();x.arc(Math.random()*512,Math.random()*512,r,0,7);x.fill();
+  }
+  const t=CTEX(cv);t.colorSpace=THREE.NoColorSpace;
   t.wrapS=t.wrapT=THREE.RepeatWrapping;
-  return t;  /* rugosité : donnée linéaire */
+  return t;  /* carte de rugosité : donnée linéaire */
 })();
+/* carte de "clearcoat normal" grossière pour un vernis irrégulier (réutilise iceRough) */
 /* Lueur interne (sprite radial teinté par état) */
 const glowTex=(function(){
   const cv=document.createElement("canvas");cv.width=cv.height=128;
@@ -870,10 +890,12 @@ DOMAINS.forEach((d,di)=>{
     const present=!!cell;
     const ess=present&&cell.essential;
     const mat=present?new THREE.MeshPhysicalMaterial({
-      color:ess?0x24509C:0x08234F,metalness:0,roughness:.5,roughnessMap:iceRough,
-      transparent:true,opacity:.46,depthWrite:false,
-      clearcoat:.7,clearcoatRoughness:.22,envMapIntensity:.8,
-      emissive:ess?0x241428:0x081B40,emissiveIntensity:.4
+      color:ess?0x24509C:0x08234F,metalness:0,roughness:.3,roughnessMap:iceRough,
+      transparent:true,opacity:.92,depthWrite:false,
+      transmission:.8,thickness:1.5,ior:1.31,attenuationDistance:2.6,
+      attenuationColor:new THREE.Color(0x2E6BD6),
+      clearcoat:.7,clearcoatRoughness:.3,envMapIntensity:.95,
+      emissive:ess?0x241428:0x0A2450,emissiveIntensity:.16
     }):new THREE.MeshPhysicalMaterial({
       color:0x6E88B4,metalness:0,roughness:.4,
       transparent:true,opacity:.05,depthWrite:false,
@@ -902,7 +924,15 @@ DOMAINS.forEach((d,di)=>{
       glow.scale.set(.62,.62,1);
       glow.position.set((Math.random()-.5)*.18,(Math.random()-.5)*.18,(Math.random()-.5)*.1);
       m.add(glow);m.userData.glow=glow;
+      /* second foyer diffus décentré : lumière piégée irrégulière dans la glace */
+      const glow2=new THREE.Sprite(new THREE.SpriteMaterial({map:glowTex,
+        color:ess?0xFF8A94:0x8FC0FF,transparent:true,opacity:0,
+        blending:THREE.AdditiveBlending,depthWrite:false}));
+      const gs=.34+Math.random()*.16;glow2.scale.set(gs,gs,1);
+      glow2.position.set((Math.random()-.5)*.42,(Math.random()-.5)*.42,(Math.random()-.5)*.25);
+      m.add(glow2);m.userData.glow2=glow2;
       m.userData.phase=Math.random()*Math.PI*2;
+      m.userData.phase2=Math.random()*Math.PI*2;
     }
     /* chaque glaçon a sa personnalité : nuance, taille, orientation */
     m.userData.cvar={
@@ -1531,7 +1561,12 @@ function animate(){
     /* lumière vivante : scintillement lent propre à chaque glaçon */
     const ph=m.userData.phase||0;
     const life=pr?(.82+.22*Math.sin(tm*.85+ph)+.1*Math.sin(tm*2.1+ph*1.7)):1;
-    mat.opacity+=((T.opacity+boost*.3)-mat.opacity)*dt;
+    mat.opacity+=((pr?(0.55+T.opacity*0.45):(T.opacity+boost*.3))-mat.opacity)*dt;
+    /* transmission : maximale au repos (glaçon translucide), réduite quand mis en avant (plus dense/lisible) */
+    if(pr){
+      const tgtTrans=0.86-Math.max(0,T.opacity-0.56)*0.7;
+      mat.transmission+=(tgtTrans-mat.transmission)*dt;
+    }
     mat.emissiveIntensity+=((T.emissiveI*pulse*life+boost)-mat.emissiveIntensity)*dt;
     /* anti-rose : le vernis et les reflets s'éteignent quand la brique vire au rouge */
     if(pr){
@@ -1568,6 +1603,14 @@ function animate(){
       /* cœur bleu par défaut ; ne devient rouge que si la brique est rouge (tranche ouverte) */
       m.userData._gcol.copy(GLOW_N).lerp(GLOW_S,T.red);
       m.userData.glow.material.color.lerp(m.userData._gcol,dt);
+    }
+    if(m.userData.glow2){
+      const ph2=m.userData.phase2||0;
+      const life2=.6+.4*Math.sin(tm*.62+ph2);   /* foyer secondaire, respiration propre */
+      m.userData.glow2.material.opacity+=((T.glow*0.55*life2)-m.userData.glow2.material.opacity)*dt;
+      m.userData._gcol2=m.userData._gcol2||new THREE.Color();
+      m.userData._gcol2.copy(GLOW_N).lerp(GLOW_S,T.red);
+      m.userData.glow2.material.color.lerp(m.userData._gcol2,dt);
     }
   });
 
