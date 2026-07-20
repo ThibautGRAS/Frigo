@@ -931,29 +931,26 @@ DOMAINS.forEach((d,di)=>{
       const gs=.34+Math.random()*.16;glow2.scale.set(gs,gs,1);
       glow2.position.set((Math.random()-.5)*.42,(Math.random()-.5)*.42,(Math.random()-.5)*.25);
       m.add(glow2);m.userData.glow2=glow2;
-      /* ── Liquide : surface à vertices animés (8×8 ondes interférentes) ── */
+      /* ── Liquide physique : équation des ondes 2D (actif seulement si domaine ouvert) ── */
       const flv=0.12+Math.random()*0.60;
       const fy=(flv-0.5)*BOX*0.84;
-      const LSEG=8;
+      const LSEG=10;                                    /* 11×11 = 121 vertices */
       const fpGeo=new THREE.PlaneGeometry(BOX*.77,BOX*.77,LSEG,LSEG);
-      /* mémoriser X/Y initiaux pour le calcul d'onde (Z est déplacé) */
-      const lpos=fpGeo.attributes.position;
-      const lxy=new Float32Array(lpos.count*2);
-      for(let i=0;i<lpos.count;i++){lxy[i*2]=lpos.getX(i);lxy[i*2+1]=lpos.getY(i);}
+      const lN=(LSEG+1)*(LSEG+1);
       const fpMat=new THREE.MeshPhysicalMaterial({
         color:ess?0xFF3344:0x2A8AFF,
         transparent:true,opacity:0,depthWrite:false,
         clearcoat:1.0,clearcoatRoughness:.03,
-        metalness:.18,roughness:.04,
-        side:THREE.DoubleSide
+        metalness:.18,roughness:.04,side:THREE.DoubleSide
       });
       const fp=new THREE.Mesh(fpGeo,fpMat);
       fp.rotation.x=-Math.PI/2;fp.position.y=fy;fp.renderOrder=2;
       m.add(fp);
       m.userData.liquid={
-        mesh:fp,geo:fpGeo,lxy,baseY:fy,level:flv,
-        pA:Math.random()*Math.PI*2,pB:Math.random()*Math.PI*2,
-        pC:Math.random()*Math.PI*2,pD:Math.random()*Math.PI*2
+        mesh:fp,geo:fpGeo,baseY:fy,level:flv,seg:LSEG,
+        h:new Float32Array(lN),   /* hauteurs de vague */
+        v:new Float32Array(lN),   /* vitesses */
+        active:false              /* ne simule que si domaine ouvert */
       };
       m.userData.phase=Math.random()*Math.PI*2;
       m.userData.phase2=Math.random()*Math.PI*2;
@@ -1170,6 +1167,20 @@ function openSlice(di,cb){
   if(metaKey){metaKey=null;card.classList.remove("show");}
   if(openDom>=0)closeSliceNow();
   openDom=di;
+  /* activer simulation liquide + impulse initiale sur ce domaine */
+  cellMeshes.forEach(m=>{
+    if(!m.userData.liquid)return;
+    const lq=m.userData.liquid,S=lq.seg;
+    lq.active=(m.userData.di===di);
+    if(lq.active){
+      const cx=Math.floor(S/2),cy=Math.floor(S/2);
+      for(let i=0;i<=S;i++)for(let j=0;j<=S;j++){
+        const d=Math.sqrt((i-cy)**2+(j-cx)**2);
+        lq.h[i*(S+1)+j]=Math.exp(-d*d*.5)*.04;
+        lq.v[i*(S+1)+j]=0;
+      }
+    }else{lq.h.fill(0);lq.v.fill(0);}
+  });
   const g=domainGroups[di];
   /* recadrage doux + la tranche vient TOUJOURS au même endroit devant ;
      le cube restant se referme derrière (pas de trou) */
@@ -1192,6 +1203,7 @@ function openSlice(di,cb){
 }
 function closeSliceNow(){
   const di=openDom;if(di<0)return;
+  cellMeshes.forEach(m=>{if(m.userData.liquid){m.userData.liquid.active=false;m.userData.liquid.h.fill(0);m.userData.liquid.v.fill(0);}});
   closeCard();
   const g=domainGroups[di];
   tw(g.userData.anim,{z:domZ(di),ry:0},750,easeIO);
@@ -1634,37 +1646,41 @@ function animate(){
     }
     if(pr&&m.userData.liquid){
       const lq=m.userData.liquid;
-      /* ── Animation vertices : 4 ondes de directions/fréquences différentes ── */
-      const visible=lq.mesh.material.opacity>0.04;
-      if(visible){
-        const lpos=lq.geo.attributes.position;
-        const lxy=lq.lxy;
-        const amp=0.024*BOX;  /* amplitude des vagues */
-        for(let i=0;i<lpos.count;i++){
-          const vx=lxy[i*2], vy=lxy[i*2+1];
-          /* 4 ondes interférentes : direction, vitesse, fréquence spatiale différentes */
-          const wz=amp*(
-            .42*Math.sin(vx*5.8+tm*2.2+lq.pA)+
-            .32*Math.sin(vy*5.1+tm*1.7+lq.pB)+
-            .18*Math.sin((vx+vy)*3.8+tm*2.9+lq.pC)+
-            .12*Math.sin((vx-vy)*6.4+tm*1.4+lq.pD)+
-            .08*Math.sin(vx*9.2+tm*3.6+lq.pA*1.4)  /* micro-rides */
-          );
-          lpos.setZ(i,wz);
-        }
-        lpos.needsUpdate=true;
-        lq.geo.computeVertexNormals();  /* normales pour l'éclairage réaliste */
-      }
-      /* tilt physique lors de la rotation du cube */
-      lq.mesh.rotation.z=rotV.vx*.22;
-      lq.mesh.rotation.x=-Math.PI/2+rotV.vy*.15;
-      lq.mesh.position.y=lq.baseY;
-      /* opacité suit la visibilité */
       const tLiq=T.opacity>0.3?(ess?.65:.55):0;
       lq.mesh.material.opacity+=(tLiq-lq.mesh.material.opacity)*dt;
       m.userData._lcol=m.userData._lcol||new THREE.Color(ess?0xFF3344:0x2A8AFF);
       m.userData._lcol.set(ess?0xFF3344:0x2A8AFF).lerp(RED_C,T.red*.5);
       lq.mesh.material.color.lerp(m.userData._lcol,dt);
+      if(lq.active&&lq.mesh.material.opacity>0.05){
+        /* ── Simulation physique : équation des ondes 2D avec amortissement ── */
+        const S=lq.seg,h2=lq.h,v2=lq.v,N=(S+1)*(S+1);
+        const c2=140,damp=.96,amp=0.028*BOX,phys_dt=Math.min(dt,.025);
+        /* force de tilt : l'inertie de rotation crée une pente d'équilibre */
+        const tiltX=rotV.vx*.35,tiltY=rotV.vy*.28;
+        for(let i=0;i<=S;i++){
+          for(let j=0;j<=S;j++){
+            const idx=i*(S+1)+j;
+            const nx=(j/S-.5),ny=(i/S-.5);
+            /* Laplacien discret (propagation de vague) */
+            let lap=0,cnt=0;
+            if(i>0){lap+=h2[(i-1)*(S+1)+j];cnt++;}
+            if(i<S){lap+=h2[(i+1)*(S+1)+j];cnt++;}
+            if(j>0){lap+=h2[i*(S+1)+j-1];cnt++;}
+            if(j<S){lap+=h2[i*(S+1)+j+1];cnt++;}
+            lap=lap/cnt-h2[idx];
+            /* équilibre penché selon l'inertie de rotation */
+            const eq=nx*tiltX+ny*tiltY;
+            v2[idx]=(v2[idx]+c2*phys_dt*lap+(eq-h2[idx])*3.0*phys_dt)*damp;
+            h2[idx]+=v2[idx];
+          }
+        }
+        /* appliquer les hauteurs aux vertices */
+        const pos=lq.geo.attributes.position;
+        for(let k=0;k<N;k++)pos.setZ(k,h2[k]*amp);
+        pos.needsUpdate=true;
+        lq.geo.computeVertexNormals();
+        lq.mesh.position.y=lq.baseY;
+      }
     }
   });
 
