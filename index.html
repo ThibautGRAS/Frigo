@@ -931,6 +931,22 @@ DOMAINS.forEach((d,di)=>{
       const gs=.34+Math.random()*.16;glow2.scale.set(gs,gs,1);
       glow2.position.set((Math.random()-.5)*.42,(Math.random()-.5)*.42,(Math.random()-.5)*.25);
       m.add(glow2);m.userData.glow2=glow2;
+      /* ── Plan liquide : surface oscillante à niveau aléatoire ── */
+      const flv=0.15+Math.random()*0.58;            /* 15 % à 73 % plein */
+      const fy=(flv-0.5)*BOX*0.86;                  /* y local dans le cube */
+      const fpGeo=new THREE.PlaneGeometry(BOX*.76,BOX*.76);
+      const fpMat=new THREE.MeshPhysicalMaterial({
+        color:ess?0xFF4455:0x3A90FF,
+        transparent:true,opacity:0,depthWrite:false,
+        clearcoat:1.0,clearcoatRoughness:.04,
+        metalness:.12,roughness:.06,
+        side:THREE.DoubleSide
+      });
+      const fp=new THREE.Mesh(fpGeo,fpMat);
+      fp.rotation.x=-Math.PI/2;fp.position.y=fy;fp.renderOrder=2;
+      m.add(fp);
+      m.userData.liquid={mesh:fp,baseY:fy,level:flv,
+        pA:Math.random()*Math.PI*2, pB:Math.random()*Math.PI*2};
       m.userData.phase=Math.random()*Math.PI*2;
       m.userData.phase2=Math.random()*Math.PI*2;
     }
@@ -1607,6 +1623,24 @@ function animate(){
       m.userData._gcol2=m.userData._gcol2||new THREE.Color();
       m.userData._gcol2.copy(GLOW_N).lerp(GLOW_S,T.red);
       m.userData.glow2.material.color.lerp(m.userData._gcol2,dt);
+    }
+    if(pr&&m.userData.liquid){
+      const lq=m.userData.liquid;
+      /* oscillation : deux fréquences désynchronisées = sloshing naturel */
+      const wave=Math.sin(tm*1.1+lq.pA)*.013+Math.sin(tm*2.4+lq.pB)*.005;
+      lq.mesh.position.y=lq.baseY+wave;
+      /* tilt léger (inclinaison surface) basé sur l'inertie de rotation */
+      lq.mesh.rotation.z=rotV.vx*.18;
+      lq.mesh.rotation.x=-Math.PI/2+rotV.vy*.12;
+      /* opacité suit la visibilité du cube */
+      const tLiq=T.opacity>0.3?(ess?.62:.52):0;
+      lq.mesh.material.opacity+=(tLiq-lq.mesh.material.opacity)*dt;
+      /* couleur : bleu ou rouge selon état */
+      m.userData._lcol=m.userData._lcol||new THREE.Color(ess?0xFF4455:0x3A90FF);
+      m.userData._lcol.set(ess?0xFF4455:0x3A90FF).lerp(RED_C,T.red*.6);
+      lq.mesh.material.color.lerp(m.userData._lcol,dt);
+      /* intensité clearcoat pulse légèrement */
+      lq.mesh.material.clearcoatRoughness=.04+Math.abs(wave)*.8;
     }
   });
 
