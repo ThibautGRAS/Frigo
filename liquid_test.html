@@ -9,23 +9,19 @@
 }}</script>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
-body{background:#03080F;overflow:hidden;touch-action:none;font-family:sans-serif}
-#hud{position:fixed;bottom:28px;left:50%;transform:translateX(-50%);display:flex;gap:10px}
-.btn{background:rgba(0,80,200,.22);border:1px solid rgba(40,140,255,.35);color:rgba(140,200,255,.9);
-  font:700 11px/1 sans-serif;letter-spacing:1.5px;padding:11px 20px;border-radius:100px;
-  cursor:pointer;text-transform:uppercase;touch-action:manipulation;user-select:none;
-  transition:.15s;-webkit-tap-highlight-color:transparent}
-.btn:active{background:rgba(0,80,220,.5);transform:scale(.93)}
-#lbl{position:fixed;top:16px;left:50%;transform:translateX(-50%);
-  color:rgba(100,180,255,.35);font:10px/1 monospace;letter-spacing:3px;text-transform:uppercase}
+body{background:#020B14;overflow:hidden;touch-action:none}
+#ui{position:fixed;bottom:26px;left:50%;transform:translateX(-50%);display:flex;gap:10px}
+.b{background:rgba(0,60,140,.28);border:1px solid rgba(40,130,255,.3);color:rgba(120,200,255,.85);
+  font:700 10px/1 monospace;letter-spacing:2px;padding:11px 18px;border-radius:100px;
+  cursor:pointer;text-transform:uppercase;touch-action:manipulation;user-select:none}
+.b:active{opacity:.7;transform:scale(.93)}
 </style>
 </head>
 <body>
-<div id="lbl">DRAG · PINCH · TILT</div>
-<div id="hud">
-  <button class="btn" id="bW">🌊 Vague</button>
-  <button class="btn" id="bLvl">📈 Niveau</button>
-  <button class="btn" id="bCol">💧 Couleur</button>
+<div id="ui">
+  <button class="b" id="bS">💧 Splash</button>
+  <button class="b" id="bF">🌀 Vortex</button>
+  <button class="b" id="bC">🎨 Couleur</button>
 </div>
 <script type="module">
 import * as THREE from 'three';
@@ -36,197 +32,238 @@ import {OutputPass} from 'three/addons/postprocessing/OutputPass.js';
 
 /* ══ Renderer ══ */
 const DPR=Math.min(devicePixelRatio,2);
-const renderer=new THREE.WebGLRenderer({antialias:true,alpha:false});
+const renderer=new THREE.WebGLRenderer({antialias:true});
 renderer.setPixelRatio(DPR);renderer.setSize(innerWidth,innerHeight);
 renderer.outputColorSpace=THREE.SRGBColorSpace;
-renderer.toneMapping=THREE.ACESFilmicToneMapping;renderer.toneMappingExposure=1.08;
-renderer.shadowMap.enabled=true;renderer.shadowMap.type=THREE.PCFSoftShadowMap;
-/* !! clipping planes activés pour l'effet "niveau d'eau" !! */
+renderer.toneMapping=THREE.ACESFilmicToneMapping;renderer.toneMappingExposure=1.1;
+renderer.shadowMap.enabled=true;
 renderer.localClippingEnabled=true;
 document.body.appendChild(renderer.domElement);
 
 const scene=new THREE.Scene();
-scene.background=new THREE.Color(0x03080F);
-scene.fog=new THREE.FogExp2(0x03080F,.05);
-
-const camera=new THREE.PerspectiveCamera(40,innerWidth/innerHeight,.1,80);
-camera.position.set(0,1.8,8);camera.lookAt(0,-.1,0);
+scene.background=new THREE.Color(0x020B14);
+scene.fog=new THREE.FogExp2(0x020B14,.045);
+const camera=new THREE.PerspectiveCamera(42,innerWidth/innerHeight,.1,80);
+camera.position.set(0,2,8);camera.lookAt(0,0,0);
 let camZT=8;
 
 /* Post */
 const rt=new THREE.WebGLRenderTarget(innerWidth*DPR,innerHeight*DPR,{samples:4});
 const composer=new EffectComposer(renderer,rt);
 composer.addPass(new RenderPass(scene,camera));
-const bloom=new UnrealBloomPass(new THREE.Vector2(innerWidth*DPR,innerHeight*DPR),.55,.5,.8);
+const bloom=new UnrealBloomPass(new THREE.Vector2(innerWidth*DPR,innerHeight*DPR),.7,.45,.72);
 composer.addPass(bloom);composer.addPass(new OutputPass());
 
 /* ══ Lumières ══ */
-scene.add(new THREE.AmbientLight(0x7AAAFF,.25));
-const sun=new THREE.DirectionalLight(0xE0EEFF,1.1);
-sun.position.set(4,10,5);sun.castShadow=true;
+scene.add(new THREE.AmbientLight(0x6090C0,.3));
+const sun=new THREE.DirectionalLight(0xEEF5FF,1.2);
+sun.position.set(5,12,4);sun.castShadow=true;
 sun.shadow.mapSize.set(1024,1024);
-Object.assign(sun.shadow.camera,{left:-5,right:5,top:5,bottom:-5,near:.1,far:25});
 scene.add(sun);
-const causticPt=new THREE.PointLight(0x40C8FF,3.5,12);scene.add(causticPt);
-const fillPt=new THREE.PointLight(0x2050C0,1.4,8);scene.add(fillPt);
-const underPt=new THREE.PointLight(0x1040A0,1.2,5);scene.add(underPt);
+const cL=new THREE.PointLight(0x40C8FF,3.5,14);scene.add(cL);
+const cL2=new THREE.PointLight(0xFF7030,.8,10);scene.add(cL2);
+const wL=new THREE.PointLight(0x2060C0,1.8,6);scene.add(wL);
 
-/* ══ Cube (tourne avec le drag) ══ */
-const BOX=3,HB=BOX/2;
+/* ══ Constantes ══ */
+const BOX=3,H=BOX/2;
 const cubeGroup=new THREE.Group();scene.add(cubeGroup);
 
-/* Parois verre — très transparentes, montrent l'eau à l'intérieur */
-const wallMat=new THREE.MeshPhysicalMaterial({
-  color:0xB0D8FF,metalness:0,roughness:.02,
-  transparent:true,opacity:.06,depthWrite:false,
-  transmission:.95,thickness:.15,ior:1.50,
-  clearcoat:1,clearcoatRoughness:.02,
-  side:THREE.DoubleSide,envMapIntensity:1.5});
-cubeGroup.add(new THREE.Mesh(new THREE.BoxGeometry(BOX,BOX,BOX),wallMat));
-
-/* Arêtes verre */
-const edgeMat=new THREE.LineBasicMaterial({color:0x60B8FF,transparent:true,opacity:.55,
-  blending:THREE.AdditiveBlending,depthWrite:false});
-cubeGroup.add(new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(BOX,BOX,BOX)),edgeMat));
-
-/* ══ Plan de coupure horizontal (world-space) : l'eau reste à niveau ══
-   Principe : le volume d'eau tourne AVEC le cube, mais est clipé PAR ce plan fixe.
-   Résultat exact : l'eau reste horizontale même quand le cube penche. */
-let waterY=-.15; // niveau en world-space Y
-const clipAbove=new THREE.Plane(new THREE.Vector3(0,-1,0), waterY+HB*.97);
-// garde tout ce qui est EN DESSOUS du plan (y ≤ waterY)
-
-/* ══ Volume d'eau (intérieur cube, clipé au-dessus du niveau) ══ */
-const PALETTES=[
-  {vol:0x1055CC,att:0x002855,surf:0x1870EE,foam:0xAADDFF,em:0x002060},
-  {vol:0x10A070,att:0x003025,surf:0x15C890,foam:0xAAFFDD,em:0x003020},
-  {vol:0xA02080,att:0x3A0040,surf:0xCC40A0,foam:0xFFAADD,em:0x300030},
-  {vol:0xC05010,att:0x401800,surf:0xEE7020,foam:0xFFD8AA,em:0x301000},
+/* Palettes */
+const PAL=[
+  {vol:0x0850A0,att:0x01152A,surf1:0x1888EE,surf2:0x40D0FF,edge:0x50B8FF},
+  {vol:0x0A8060,att:0x011E15,surf1:0x15C090,surf2:0x40FFD0,edge:0x40FFB0},
+  {vol:0x7010A0,att:0x1A0030,surf1:0xA030D0,surf2:0xFF60FF,edge:0xC060FF},
+  {vol:0xA03010,att:0x2A0800,surf1:0xEE6010,surf2:0xFFB040,edge:0xFFD060},
 ];
-let pi=0;
-function pal(){return PALETTES[pi];}
+let pi=0;function pal(){return PAL[pi];}
 
-const volMat=new THREE.MeshPhysicalMaterial({
-  color:pal().vol,metalness:0,roughness:.01,
-  transparent:true,opacity:.72,depthWrite:false,
-  transmission:.6,ior:1.333,thickness:2.5,
-  attenuationColor:new THREE.Color(pal().att),attenuationDistance:1.2,
-  clearcoat:.5,clearcoatRoughness:.08,
-  side:THREE.BackSide, // vue depuis l'extérieur à travers le verre
-  clippingPlanes:[clipAbove],clipIntersection:false
+/* ══ SIMULATION GPU — plan horizontal dans repère LOCAL du cube ══
+   Clé physique : la gravité dans le repère local change quand on tourne le cube.
+   Les composantes X/Z de cette gravité locale poussent l'eau → vrai slosh. */
+const SIM=512;
+const rtOpt={type:THREE.FloatType,format:THREE.RGBAFormat,
+  minFilter:THREE.LinearFilter,magFilter:THREE.LinearFilter,
+  wrapS:THREE.ClampToEdgeWrapping,wrapT:THREE.ClampToEdgeWrapping};
+let rtA=new THREE.WebGLRenderTarget(SIM,SIM,rtOpt);
+let rtB=new THREE.WebGLRenderTarget(SIM,SIM,rtOpt);
+let rtNorm=new THREE.WebGLRenderTarget(SIM,SIM,rtOpt);
+const simCam=new THREE.OrthographicCamera(-1,1,1,-1,0,1);
+const simScene=new THREE.Scene();
+
+/* Shader simulation : équation des ondes 2D + force de gravité locale */
+const simMat=new THREE.ShaderMaterial({
+  uniforms:{
+    uPrev:{value:null},uCurr:{value:null},
+    uGX:{value:0},uGZ:{value:0},   // gravité locale X,Z (change avec rotation)
+    uSpeed:{value:.24},uDamp:{value:.988},
+    uDrop:{value:new THREE.Vector4(-2,-2,0,0)},
+    uRes:{value:new THREE.Vector2(SIM,SIM)},
+  },
+  vertexShader:`void main(){gl_Position=vec4(position,1.);}`,
+  fragmentShader:`
+uniform sampler2D uPrev,uCurr;
+uniform vec2 uRes;uniform vec4 uDrop;
+uniform float uSpeed,uDamp,uGX,uGZ;
+void main(){
+  vec2 uv=gl_FragCoord.xy/uRes, px=1./uRes;
+  float c=texture2D(uCurr,uv).r;
+  float p=texture2D(uPrev,uv).r;
+  float L=texture2D(uCurr,uv-vec2(px.x,0)).r;
+  float R=texture2D(uCurr,uv+vec2(px.x,0)).r;
+  float D=texture2D(uCurr,uv-vec2(0,px.y)).r;
+  float U=texture2D(uCurr,uv+vec2(0,px.y)).r;
+  /* Équation des ondes discrète */
+  float next=2.*c - p + uSpeed*(L+R+D+U - 4.*c);
+  /* Force de gravité locale → équilibre penché = SLOSH RÉEL */
+  vec2 pos=uv-.5;
+  float eq=(pos.x*uGX + pos.y*uGZ)*.55;
+  next+=(eq-c)*.028;
+  next*=uDamp;
+  next=clamp(next,-1.,1.);
+  /* Perturbation interactive */
+  if(uDrop.z>0.){
+    vec2 d=uv-uDrop.xy; float r2=dot(d,d),r=uDrop.w*uDrop.w;
+    if(r2<r) next+=uDrop.z*(1.-r2/r);
+  }
+  gl_FragColor=vec4(next,0,0,1);
+}`,depthTest:false,depthWrite:false
 });
-const volMesh=new THREE.Mesh(new THREE.BoxGeometry(BOX*.96,BOX*.96,BOX*.96),volMat);
-cubeGroup.add(volMesh);
+simScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2,2),simMat));
 
-/* Fond du volume (face inférieure visible = eau profonde) */
-const botMat=new THREE.MeshPhysicalMaterial({
-  color:pal().att,metalness:0,roughness:.05,
-  transparent:true,opacity:.65,depthWrite:false,
-  clippingPlanes:[clipAbove]});
-cubeGroup.add(new THREE.Mesh(new THREE.BoxGeometry(BOX*.96,BOX*.96,BOX*.96),botMat));
+/* Shader normales */
+const normScene=new THREE.Scene();
+const normMat=new THREE.ShaderMaterial({
+  uniforms:{uH:{value:null},uRes:{value:new THREE.Vector2(SIM,SIM)},uS:{value:.42}},
+  vertexShader:`void main(){gl_Position=vec4(position,1.);}`,
+  fragmentShader:`
+uniform sampler2D uH;uniform vec2 uRes;uniform float uS;
+void main(){
+  vec2 px=1./uRes,uv=gl_FragCoord.xy/uRes;
+  float L=texture2D(uH,uv-vec2(px.x,0)).r,R=texture2D(uH,uv+vec2(px.x,0)).r;
+  float D=texture2D(uH,uv-vec2(0,px.y)).r,U=texture2D(uH,uv+vec2(0,px.y)).r;
+  vec3 n=normalize(vec3((L-R)*uS,(D-U)*uS,1.));
+  gl_FragColor=vec4(n*.5+.5,1.);
+}`,depthTest:false,depthWrite:false
+});
+normScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2,2),normMat));
 
-/* ══ Surface de l'eau (Gerstner waves GPU) ══
-   CONTRE-ROTATION : reste horizontale en world-space même quand le cube penche */
-const SRES=80;
-const surfGeo=new THREE.PlaneGeometry(BOX*.93,BOX*.93,SRES,SRES);
+function stepSim(drop){
+  simMat.uniforms.uDrop.value.set(
+    drop?drop.x:-2,drop?drop.y:-2,drop?drop.z:0,drop?drop.w:.08);
+  simMat.uniforms.uCurr.value=rtA.texture;
+  simMat.uniforms.uPrev.value=rtB.texture;
+  renderer.setRenderTarget(rtB);renderer.render(simScene,simCam);
+  normMat.uniforms.uH.value=rtB.texture;
+  renderer.setRenderTarget(rtNorm);renderer.render(normScene,simCam);
+  renderer.setRenderTarget(null);
+  [rtA,rtB]=[rtB,rtA];
+}
+
+/* ══ Surface eau — dans le repère LOCAL du cube (tourne avec lui) ══ */
+const SRES=128;
+const surfGeo=new THREE.PlaneGeometry(BOX*.95,BOX*.95,SRES,SRES);
 surfGeo.rotateX(-Math.PI/2);
-
+const p=pal();
 const surfMat=new THREE.ShaderMaterial({
   transparent:true,depthWrite:false,side:THREE.DoubleSide,
   uniforms:{
-    uTime:{value:0},
-    uWaterColor:{value:new THREE.Color(pal().surf)},
-    uFoamColor:{value:new THREE.Color(pal().foam)},
-    uDeepColor:{value:new THREE.Color(pal().att)},
-    uSunDir:{value:new THREE.Vector3(.4,.9,.3).normalize()},
-    uCamPos:{value:camera.position},
-    uRipple:{value:new THREE.Vector4(0,0,0,0)},
+    uHeight:{value:null},uNormal:{value:null},
+    uAmp:{value:.28},uTime:{value:0},
+    uColor1:{value:new THREE.Color(p.surf1)},
+    uColor2:{value:new THREE.Color(p.surf2)},
+    uSun:{value:sun.position.clone().normalize()},
+    uEye:{value:camera.position},
   },
   vertexShader:`
-uniform float uTime;uniform vec4 uRipple;
-varying vec3 vPos,vN;varying vec2 vUV;varying float vFoam;
-#define PI 3.141593
-/* Gerstner wave : vrai mouvement cyclique 3D, plus réaliste que sin */
-vec3 gerstner(vec2 p,vec2 d,float A,float L,float speed,float steep){
-  float k=2.*PI/L,c=sqrt(9.8/k),w=c*k*speed;
-  float f=k*dot(d,p)-w*uTime;
-  float Q=steep/(k*A);
-  return vec3(Q*A*d.x*cos(f), A*sin(f), Q*A*d.y*cos(f));
-}
+uniform sampler2D uHeight;uniform float uAmp;
+varying vec2 vUV;varying float vH;varying vec3 vWP,vWN;
 void main(){
-  vUV=uv;vec3 p=position;
-  /* 4 ondes Gerstner superposées */
-  vec3 w =gerstner(p.xz,normalize(vec2(1.,.4)),.055,1.3,1.,.6);
-  w+=      gerstner(p.xz,normalize(vec2(-.5,1.)),.04,1.8,.7,.5);
-  w+=      gerstner(p.xz,normalize(vec2(.7,-.7)),.028,.9,1.2,.4);
-  w+=      gerstner(p.xz,normalize(vec2(.2,.9)),.018,2.2,.55,.35);
-  p+=w;
-  /* ripple interactif */
-  if(uRipple.z>0.){
-    vec2 dp=p.xz-uRipple.xy;float r=length(dp);
-    float t=uTime-uRipple.w;
-    if(t>0.&&t<2.5){
-      float wave=sin(r*8.-t*5.)*exp(-r*1.5-t*.8)*uRipple.z;
-      p.y+=wave;
-    }
-  }
-  vFoam=clamp(w.y*4.,0.,1.);
-  vPos=(modelMatrix*vec4(p,1.)).xyz;
-  /* normale approx depuis la dérivée (tangent space) */
-  vec3 tang=normalize(vec3(1.,gerstner(p.xz+vec2(.01,0.),normalize(vec2(1.,.4)),.055,1.3,1.,.6).y-w.y,0.));
-  vec3 btan=normalize(vec3(0.,gerstner(p.xz+vec2(0.,.01),normalize(vec2(1.,.4)),.055,1.3,1.,.6).y-w.y,1.));
-  vN=normalize((modelMatrix*vec4(cross(btan,tang),0.)).xyz);
-  gl_Position=projectionMatrix*modelViewMatrix*vec4(p,1.);
+  vUV=uv;
+  float h=texture2D(uHeight,uv).r;vH=h;
+  vec3 pos=position;pos.y+=h*uAmp;
+  vWP=(modelMatrix*vec4(pos,1.)).xyz;
+  /* Normale depuis la height-map */
+  vec2 d=vec2(1./128.,.0);
+  float hL=texture2D(uHeight,uv-d.xy).r,hR=texture2D(uHeight,uv+d.xy).r;
+  float hD=texture2D(uHeight,uv-d.yx).r,hU=texture2D(uHeight,uv+d.yx).r;
+  vec3 n=normalize(vec3((hL-hR)*uAmp*60.,(hD-hU)*uAmp*60.,1.));
+  vWN=normalize((modelMatrix*vec4(n,0.)).xyz);
+  gl_Position=projectionMatrix*modelViewMatrix*vec4(pos,1.);
 }`,
   fragmentShader:`
-uniform vec3 uWaterColor,uFoamColor,uDeepColor,uSunDir,uCamPos;
-uniform float uTime;
-varying vec3 vPos,vN;varying vec2 vUV;varying float vFoam;
+uniform vec3 uColor1,uColor2,uSun,uEye;
+uniform float uTime;uniform sampler2D uNormal;
+varying vec2 vUV;varying float vH;varying vec3 vWP,vWN;
 void main(){
-  vec3 n=normalize(vN);
-  vec3 v=normalize(uCamPos-vPos);
-  /* Fresnel — l'eau reflète plus à angle rasant */
-  float F0=.02;float F=F0+(1.-F0)*pow(1.-max(0.,dot(n,v)),5.);
-  /* Diffuse solaire */
-  float dif=max(0.,dot(n,uSunDir));
-  /* Spéculaire haute fréquence (éclat solaire) */
-  float spec=pow(max(0.,dot(reflect(-uSunDir,n),v)),260.);
-  /* Couleur de base (mélange profondeur/surface) */
-  float depth=smoothstep(-.12,.12,vPos.y);
-  vec3 col=mix(uDeepColor,uWaterColor,depth);
-  col=mix(col,uFoamColor,vFoam*.45);
-  /* Lumière */
-  col*=.5+dif*.7;
-  col+=vec3(.85,.96,1.)*spec*1.4;
-  /* Réflexion env approx */
-  col+=mix(uDeepColor,vec3(.6,.85,1.),F)*.25;
-  /* Micro-scintillement de surface */
-  float sc=fract(sin(dot(vUV,vec2(12.9898,78.233)))*43758.);
-  col+=vFoam*sc*.08*vec3(.8,1.,1.2);
-  float alpha=mix(.78,.92,F)+vFoam*.08;
+  vec3 n=normalize(vWN);
+  vec3 v=normalize(uEye-vWP);
+  /* Fresnel */
+  float F=pow(1.-max(0.,dot(n,v)),4.)*.85+.05;
+  /* Spéculaire solaire */
+  float spec=pow(max(0.,dot(reflect(-uSun,n),v)),180.);
+  float spec2=pow(max(0.,dot(reflect(-uSun,n),v)),20.)*.15;
+  /* Couleur eau */
+  float cr=smoothstep(-.25,.35,vH);
+  vec3 col=mix(uColor1*.6,uColor2,cr);
+  col=mix(col,vec3(.9,.97,1.),spec*2.5+spec2);
+  /* Réflexion env bleue */
+  col=mix(col,uColor2*.9,F*.5);
+  /* Caustiques animées */
+  float t=uTime;
+  float ca=sin(vUV.x*18.-t*2.2)*sin(vUV.y*18.-t*1.8)*.5+.5;
+  float cb=sin((vUV.x+vUV.y)*14.-t*2.8)*.5+.5;
+  col+=uColor2*ca*cb*.12;
+  /* Écume crêtes */
+  float foam=smoothstep(.18,.42,vH);
+  col=mix(col,vec3(.92,.97,1.),foam*.6);
+  float alpha=mix(.78,.96,F)+foam*.08;
   gl_FragColor=vec4(col,alpha);
 }`
 });
-
 const surfMesh=new THREE.Mesh(surfGeo,surfMat);
+surfMesh.position.y=-.05;
 cubeGroup.add(surfMesh);
 
-/* Sol (reçoit ombres/caustiques) */
-const floorM=new THREE.Mesh(new THREE.PlaneGeometry(14,14),new THREE.ShadowMaterial({opacity:.3}));
-floorM.rotation.x=-Math.PI/2;floorM.position.y=-HB-.01;floorM.receiveShadow=true;
-scene.add(floorM);
+/* ══ Volume eau (visible depuis les côtés) ══ */
+const waterY=0;
+const clipP=new THREE.Plane(new THREE.Vector3(0,-1,0),HB*.96);
+renderer.localClippingEnabled=true;
 
-/* ══ Rotation drag ══ */
-const rot={x:.3,y:-.35};let drag=false,lX=0,lY=0,rVX=0,rVY=0;
+const volMat=new THREE.MeshPhysicalMaterial({
+  color:pal().vol,metalness:0,roughness:.0,transparent:true,opacity:.6,depthWrite:false,
+  transmission:.7,ior:1.333,thickness:2.2,
+  attenuationColor:new THREE.Color(pal().att),attenuationDistance:1.0,
+  clearcoat:.4,clearcoatRoughness:.05,side:THREE.BackSide,
+  clippingPlanes:[clipP]});
+cubeGroup.add(new THREE.Mesh(new THREE.BoxGeometry(BOX*.97,BOX*.97,BOX*.97),volMat));
+
+/* ══ Parois verre ══ */
+const glassMat=new THREE.MeshPhysicalMaterial({
+  color:0xB8D8FF,metalness:0,roughness:.02,transparent:true,opacity:.07,depthWrite:false,
+  transmission:.94,ior:1.50,clearcoat:1,clearcoatRoughness:.02,
+  side:THREE.DoubleSide,envMapIntensity:1.8});
+cubeGroup.add(new THREE.Mesh(new THREE.BoxGeometry(BOX,BOX,BOX),glassMat));
+const edgeMat=new THREE.LineBasicMaterial({color:pal().edge,transparent:true,opacity:.65,
+  blending:THREE.AdditiveBlending,depthWrite:false});
+cubeGroup.add(new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(BOX,BOX,BOX)),edgeMat));
+
+/* Sol */
+const floor=new THREE.Mesh(new THREE.PlaneGeometry(14,14),new THREE.ShadowMaterial({opacity:.32}));
+floor.rotation.x=-Math.PI/2;floor.position.y=-H-.01;floor.receiveShadow=true;scene.add(floor);
+
+/* ══ Interaction ══ */
+const rot={x:.25,y:-.4};let drag=false,lX=0,lY=0,rX=0,rY=0,prevRX=0,prevRY=0,angVX=0,angVZ=0;
 renderer.domElement.addEventListener('pointerdown',e=>{
-  drag=true;lX=e.clientX;lY=e.clientY;rVX=rVY=0;
+  drag=true;lX=e.clientX;lY=e.clientY;rX=rY=0;
   renderer.domElement.setPointerCapture(e.pointerId);
 });
 renderer.domElement.addEventListener('pointerup',()=>drag=false);
 renderer.domElement.addEventListener('pointermove',e=>{
   if(!drag)return;
   const dx=(e.clientX-lX)*.007,dy=(e.clientY-lY)*.006;
-  rot.y+=dx;rot.x+=dy;lX=e.clientX;lY=e.clientY;rVX=dy;rVY=dx;
+  prevRX=rot.x;prevRY=rot.y;
+  rot.y+=dx;rot.x+=dy;lX=e.clientX;lY=e.clientY;rX=dy;rY=dx;
+  angVX=(rot.x-prevRX)*60;angVZ=(rot.y-prevRY)*60;
   e.preventDefault();
 },{passive:false});
 addEventListener('wheel',e=>{camZT=THREE.MathUtils.clamp(camZT+e.deltaY*.012,3,14);},{passive:true});
@@ -236,86 +273,82 @@ renderer.domElement.addEventListener('touchstart',e=>{if(e.touches.length===2)
 },{passive:true});
 renderer.domElement.addEventListener('touchmove',e=>{if(e.touches.length===2){
   const d=Math.hypot(e.touches[0].clientX-e.touches[1].clientX,e.touches[0].clientY-e.touches[1].clientY);
-  camZT=THREE.MathUtils.clamp(camZT-(d-P0)*.022,3,14);P0=d;e.preventDefault();
+  camZT=THREE.MathUtils.clamp(camZT-(d-P0)*.025,3,14);P0=d;e.preventDefault();
 }},{passive:false});
 
-/* Ripple au tap sur canvas */
-renderer.domElement.addEventListener('click',e=>{
-  if(!drag){
-    const x=(e.clientX/innerWidth-.5)*BOX*.85;
-    const z=(e.clientY/innerHeight-.5)*BOX*.85;
-    surfMat.uniforms.uRipple.value.set(x,z,1.4,performance.now()*.001);
-  }
+let pendingDrop=null;
+document.getElementById('bS').addEventListener('click',()=>{
+  pendingDrop={x:.2+Math.random()*.6,y:.2+Math.random()*.6,z:1.2+Math.random()*.6,w:.14};});
+document.getElementById('bF').addEventListener('click',()=>{
+  /* vortex = 4 drops décalés en cercle */
+  const t=performance.now()*.001;
+  [0,1,2,3].forEach(i=>{setTimeout(()=>{
+    pendingDrop={x:.5+Math.cos(i*1.57+t)*.28,y:.5+Math.sin(i*1.57+t)*.28,z:.7,w:.08};
+  },i*80);});
 });
-
-/* ══ Boutons ══ */
-let lvlDir=1;
-document.getElementById('bW').addEventListener('click',()=>{
-  const x=(Math.random()-.5)*BOX*.7,z=(Math.random()-.5)*BOX*.7;
-  surfMat.uniforms.uRipple.value.set(x,z,1.8,performance.now()*.001);
-});
-document.getElementById('bLvl').addEventListener('click',e=>{
-  lvlDir*=-1;e.target.textContent=lvlDir>0?'📈 Niveau':'📉 Niveau';
-});
-document.getElementById('bCol').addEventListener('click',()=>{
-  pi=(pi+1)%PALETTES.length;const p=pal();
+document.getElementById('bC').addEventListener('click',()=>{
+  pi=(pi+1)%PAL.length;const p=pal();
   volMat.color.setHex(p.vol);volMat.attenuationColor.setHex(p.att);
-  botMat.color.setHex(p.att);
-  surfMat.uniforms.uWaterColor.value.setHex(p.surf);
-  surfMat.uniforms.uFoamColor.value.setHex(p.foam);
-  surfMat.uniforms.uDeepColor.value.setHex(p.att);
-  edgeMat.color.setHex(p.surf);
+  surfMat.uniforms.uColor1.value.setHex(p.surf1);
+  surfMat.uniforms.uColor2.value.setHex(p.surf2);
+  edgeMat.color.setHex(p.edge);
+});
+renderer.domElement.addEventListener('click',e=>{
+  if(drag)return;
+  pendingDrop={x:e.clientX/innerWidth,y:e.clientY/innerHeight,z:.9,w:.1};
 });
 
 /* ══ Boucle ══ */
 let last=performance.now();
-const _invQ=new THREE.Quaternion();
+const _iQ=new THREE.Quaternion(),_gL=new THREE.Vector3();
 
 function tick(now){
   requestAnimationFrame(tick);
   const dt=Math.min((now-last)/1000,.04);last=now;
 
-  /* rotation cube avec inertie */
-  if(!drag){rot.y+=rVY;rot.x+=rVX;rVX*=.85;rVY*=.85;}
-  rot.x=THREE.MathUtils.clamp(rot.x,-1.35,1.35);
+  /* Rotation cube avec inertie */
+  if(!drag){rot.y+=rY;rot.x+=rX;rX*=.87;rY*=.87;}
+  rot.x=THREE.MathUtils.clamp(rot.x,-1.4,1.4);
   cubeGroup.rotation.set(rot.x,rot.y,0);
 
-  /* LA CLÉ : la surface d'eau CONTRE-TOURNE pour rester horizontale en world-space */
-  surfMesh.quaternion.copy(cubeGroup.quaternion).invert();
+  /* ⚡ CLÉ : gravité dans repère local du cube */
+  _iQ.copy(cubeGroup.quaternion).invert();
+  _gL.set(0,-1,0).applyQuaternion(_iQ);
+  /* Ces composantes X,Z alimentent le simulateur → vrai slosh physique */
+  simMat.uniforms.uGX.value=_gL.x*2.5;
+  simMat.uniforms.uGZ.value=_gL.z*2.5;
 
-  /* Niveau d'eau qui monte/descend doucement */
-  waterY=THREE.MathUtils.clamp(waterY+lvlDir*.003,-.8,.6);
-  clipAbove.constant=waterY+HB*.97;
-  surfMesh.position.y=waterY; // en local-space = world-space Y (grâce à la contre-rotation)
+  /* Simulation GPU une passe */
+  stepSim(pendingDrop);pendingDrop=null;
 
-  /* Surface : temps et direction solaire animée */
+  /* Mettre à jour la surface */
+  surfMat.uniforms.uHeight.value=rtA.texture;
+  surfMat.uniforms.uNormal.value=rtNorm.texture;
   surfMat.uniforms.uTime.value=now*.001;
-  surfMat.uniforms.uSunDir.value.set(
-    Math.cos(now*.0003),1,Math.sin(now*.0003)).normalize();
+  surfMat.uniforms.uSun.value.copy(sun.position).normalize();
 
-  /* Caméra zoom smooth */
+  /* Zoom camera */
   camera.position.z+=(camZT-camera.position.z)*.1;
 
-  /* Lumières caustic (world-space, orbitent autour du cube) */
+  /* Lumières caustic (monde) */
   const t=now*.001;
-  causticPt.position.set(Math.cos(t*.48)*5,3.5+Math.sin(t*.31),Math.sin(t*.48)*5);
-  causticPt.intensity=3.+1.2*Math.sin(t*.7);
-  causticPt.color.setHSL(.58+Math.sin(t*.18)*.05,.92,.6);
-  fillPt.position.set(-3,1.5,3);
-  /* lumière sous l'eau = suit la contre-surface dans le repère cube */
-  const wp=new THREE.Vector3(0,waterY-.3,0).applyMatrix4(cubeGroup.matrixWorld);
-  underPt.position.copy(wp);
-  underPt.intensity=1.1+.4*Math.sin(t*1.2);
+  cL.position.set(Math.cos(t*.45)*5.5,3.8+Math.sin(t*.28),Math.sin(t*.45)*5.5);
+  cL.intensity=3.2+1.2*Math.sin(t*.65);
+  cL.color.setHSL(.57+Math.sin(t*.15)*.04,.95,.58);
+  cL2.position.set(Math.cos(t*.3+2.5)*4.5,-2.2,Math.sin(t*.3+2.5)*4.5);
+  cL2.intensity=.7+.5*Math.sin(t*1.05);
+  /* Lumière sous la surface : suit le bas du cube */
+  wL.position.set(0,-H*.5,0).applyMatrix4(cubeGroup.matrixWorld);
+  wL.intensity=1.2+.4*Math.sin(t*.9);
 
   composer.render();
 }
 requestAnimationFrame(tick);
 
 addEventListener('resize',()=>{
-  renderer.setSize(innerWidth,innerHeight);camera.aspect=innerWidth/innerHeight;
-  camera.updateProjectionMatrix();composer.setSize(innerWidth,innerHeight);
+  renderer.setSize(innerWidth,innerHeight);
+  camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();
+  composer.setSize(innerWidth,innerHeight);
   rt.setSize(innerWidth*DPR,innerHeight*DPR);
 });
-</script>
-</body>
-</html>
+</script></body></html>
