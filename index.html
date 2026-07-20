@@ -31,11 +31,10 @@ button{font-family:inherit;color:inherit}
 #bgfx{
   position:fixed;inset:0;z-index:0;pointer-events:none;
   background:
-    radial-gradient(1200px 1000px at 50% 36%, rgba(255,255,255,.95), transparent 58%),
-    radial-gradient(1400px 1000px at 78% 14%, rgba(198,220,252,.55), transparent 64%),
-    radial-gradient(1100px 900px at 12% 94%, rgba(180,205,245,.5), transparent 62%),
-    radial-gradient(700px 700px at 50% 52%, rgba(96,140,225,.10), transparent 70%),
-    linear-gradient(165deg,#F6F9FD 0%,#EAF1FA 46%,#D8E4F3 100%);
+    radial-gradient(ellipse 130% 110% at 50% 40%, rgba(255,255,255,.92) 0%, rgba(220,234,252,.55) 42%, transparent 70%),
+    radial-gradient(ellipse 90% 80% at 80% 15%, rgba(190,215,250,.38) 0%, transparent 60%),
+    radial-gradient(ellipse 80% 70% at 10% 95%, rgba(170,200,242,.32) 0%, transparent 58%),
+    linear-gradient(175deg,#F2F6FC 0%,#E6EEF8 35%,#D8E4F2 65%,#CDD9ED 100%);
 }
 #bgfx::before{ /* micro-grille */
   content:"";position:absolute;inset:0;opacity:.5;
@@ -65,8 +64,8 @@ button{font-family:inherit;color:inherit}
 .brand .logo-img{height:23px;display:block}
 .brand .sub{font-size:9px;letter-spacing:2.6px;text-transform:uppercase;color:var(--ink-dim);margin-top:5px;font-family:'Montserrat';font-weight:600}
 .title-block{text-align:center;position:fixed;top:max(16px, env(safe-area-inset-top));left:50%;transform:translateX(-50%);pointer-events:none}
-.title-block .ey{font-family:'Montserrat';font-weight:600;font-size:9px;letter-spacing:3.5px;color:var(--red);text-transform:uppercase}
-.title-block h1{font-family:'Montserrat';font-weight:600;font-size:15px;letter-spacing:.6px;color:var(--ink);margin-top:3px}
+.title-block .ey{font-family:'Montserrat';font-weight:600;font-size:8px;letter-spacing:3px;color:var(--red);text-transform:uppercase;opacity:.75}
+.title-block h1{font-family:'Montserrat';font-weight:700;font-size:18px;letter-spacing:.4px;color:var(--navy);margin-top:4px}
 @media(max-width:760px){.title-block{display:none}}
 
 .pill{
@@ -92,28 +91,32 @@ button{font-family:inherit;color:inherit}
 /* ---------- Rail des domaines ---------- */
 .rail{
   left:20px;top:50%;transform:translateY(-50%);
-  display:flex;flex-direction:column;gap:8px;max-width:250px;
+  display:flex;flex-direction:column;gap:5px;max-width:210px;
 }
 .rail .rlabel{
-  font-family:'Montserrat';font-weight:600;font-size:9px;letter-spacing:3px;
-  text-transform:uppercase;color:var(--ink-faint);margin:0 0 4px 16px;
+  font-family:'Montserrat';font-weight:700;font-size:9.5px;letter-spacing:2.5px;
+  text-transform:uppercase;color:var(--red);margin:0 0 8px 14px;opacity:.8;
 }
 .dbtn{
-  display:flex;align-items:center;gap:9px;padding:8px 13px;cursor:pointer;
-  text-align:left;transition:all .3s cubic-bezier(.22,1,.36,1);
-  border-radius:12px;color:var(--ink-dim);
+  display:flex;align-items:center;gap:10px;padding:9px 14px;cursor:pointer;
+  text-align:left;transition:all .22s cubic-bezier(.22,1,.36,1);
+  border-radius:10px;color:var(--ink-dim);position:relative;
+  border:1px solid transparent;
 }
 .dbtn .idx{
-  font-family:'Montserrat';font-weight:700;font-size:10px;color:var(--ink-faint);
-  width:20px;flex-shrink:0;transition:color .25s;
+  font-family:'Montserrat';font-weight:800;font-size:11.5px;color:var(--ink-faint);
+  width:22px;flex-shrink:0;transition:color .2s;
 }
-.dbtn .dn{font-family:'Montserrat';font-weight:500;font-size:12px;letter-spacing:.3px;color:var(--ink-dim);transition:color .25s}
-.dbtn .bar{width:2px;height:0;background:var(--red);border-radius:1px;transition:height .3s;position:absolute;left:0}
-.dbtn{position:relative}
-.dbtn:hover .dn{color:var(--ink)}
-.dbtn.on{background:var(--glass2);border-color:var(--line2);transform:translateX(6px)}
-.dbtn.on .dn{color:#fff;font-weight:600}
-.dbtn.on .idx{color:var(--red)}
+.dbtn .dn{font-family:'Montserrat';font-weight:500;font-size:13px;letter-spacing:.2px;color:var(--ink-dim);transition:color .2s}
+.dbtn .bar{width:3px;height:0;background:var(--red);border-radius:2px;transition:height .25s;position:absolute;left:0;border-radius:0 2px 2px 0}
+/* HOVER : fond rouge discret, idx rouge vif */
+.dbtn:hover{background:rgba(239,51,70,.08);border-color:rgba(239,51,70,.18)}
+.dbtn:hover .idx{color:var(--red)}
+.dbtn:hover .dn{color:var(--navy)}
+/* ACTIF (domaine ouvert) */
+.dbtn.on{background:rgba(239,51,70,.12);border-color:rgba(239,51,70,.32);transform:translateX(5px)}
+.dbtn.on .dn{color:var(--navy);font-weight:700}
+.dbtn.on .idx{color:var(--red);font-size:12.5px}
 .dbtn.on .bar{height:55%}
 @media(max-width:760px){
   .rail{
@@ -393,8 +396,8 @@ background:rgba(255,255,255,.82);border-radius:100px;box-shadow:0 4px 16px rgba(
 <div class="pill toast sg" id="toast">Touchez le cube · Glissez pour pivoter</div>
 <div class="pill prescap sg" id="presCap"></div>
 <div class="title-block hud">
-  <div class="ey sg">Jumeau numérique · Feuille de route R&amp;D</div>
-  <h1 class="sg">Le cube stratégique</h1>
+  <div class="ey sg">CETIM · Acoustique &amp; Vibrations</div>
+  <h1 class="sg">Feuille de route R&amp;D</h1>
 </div>
 
 <div class="hud rail" id="rail"><div class="rlabel sg">Domaines scientifiques</div></div>
@@ -971,7 +974,7 @@ DOMAINS.forEach((d,di)=>{
 const axisLabels=[];
 function makeAxisLabel(id,name,color){
   const cv=document.createElement("canvas");
-  const f1=64,f2=30,pad=26,gap=10;
+  const f1=68,f2=30,pad=26,gap=10;
   const m=cv.getContext("2d");
   m.font=`800 ${f1}px 'Montserrat', Arial`;
   const w1=m.measureText(id).width;
@@ -1008,21 +1011,21 @@ const zF=frontZ+0.75, xR=(NX-1)/2*S+1.05;
   const zz=face==="front"?zF:-zF;
   AXES.forEach((a,ai)=>{
     const sp=axisLabel(a.id,SHORT[a.id],"#D42233","axe",ai,
-      new THREE.Vector3(cellLocal(ai,0).x,(NY-1)/2*S+0.95+(ai===1?0.5:0),zz),.38);
+      new THREE.Vector3(cellLocal(ai,0).x,(NY-1)/2*S+0.95+(ai===1?0.5:0),zz),.48);
     sp.userData.face=face;
   });
   LEVIERS.forEach((l,li)=>{
     const sp=axisLabel(l.id,SHORT[l.id],"#123A7E","levier",li,
-      new THREE.Vector3((face==="front"?-1:1)*((NX-1)/2*S+0.85),cellLocal(0,li).y,zz),.36);
+      new THREE.Vector3((face==="front"?-1:1)*((NX-1)/2*S+0.85),cellLocal(0,li).y,zz),.44);
     sp.userData.face=face;
   });
 });
 const domLabels=[];
 ["right","left"].forEach(face=>{
   DOMAINS.forEach((d,di)=>{
-    const v=makeAxisLabel(d.id,d.name,"#D42233");
+    const v=makeAxisLabel(d.id,d.name,"#EF3346");
     const sp=new THREE.Sprite(new THREE.SpriteMaterial({map:v.tex,transparent:true,depthTest:false,opacity:0}));
-    const size=.36;
+    const size=.44;
     sp.scale.set(size*v.ar,size,1);
     sp.position.set(face==="right"?xR:-xR,-((NY-1)/2*S+0.9),domZ(di));
     sp.userData={type:"domaine",index:di,base:size,ar:v.ar,face};
@@ -1741,7 +1744,7 @@ function resize(){
   CAM.max=CAM.home+9;
   camDist=THREE.MathUtils.clamp(camDist,CAM.min,CAM.max);
   /* échelle des étiquettes 3D proportionnelle à la distance de confort */
-  const k=THREE.MathUtils.clamp(CAM.home/15,1,1.7);
+  const k=THREE.MathUtils.clamp(CAM.home/15,1,1.7)*(innerWidth>760?1.32:1);
   cellMeshes.forEach(m=>{if(m.userData.info)m.userData.info.scale.set(.3*k,.3*k,1);});
   domainGroups.forEach(g=>g.userData.labels.children.forEach(sp=>{
     if(!sp.userData.bs)sp.userData.bs={x:sp.scale.x,y:sp.scale.y};
