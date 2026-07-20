@@ -931,22 +931,30 @@ DOMAINS.forEach((d,di)=>{
       const gs=.34+Math.random()*.16;glow2.scale.set(gs,gs,1);
       glow2.position.set((Math.random()-.5)*.42,(Math.random()-.5)*.42,(Math.random()-.5)*.25);
       m.add(glow2);m.userData.glow2=glow2;
-      /* ── Plan liquide : surface oscillante à niveau aléatoire ── */
-      const flv=0.15+Math.random()*0.58;            /* 15 % à 73 % plein */
-      const fy=(flv-0.5)*BOX*0.86;                  /* y local dans le cube */
-      const fpGeo=new THREE.PlaneGeometry(BOX*.76,BOX*.76);
+      /* ── Liquide : surface à vertices animés (8×8 ondes interférentes) ── */
+      const flv=0.12+Math.random()*0.60;
+      const fy=(flv-0.5)*BOX*0.84;
+      const LSEG=8;
+      const fpGeo=new THREE.PlaneGeometry(BOX*.77,BOX*.77,LSEG,LSEG);
+      /* mémoriser X/Y initiaux pour le calcul d'onde (Z est déplacé) */
+      const lpos=fpGeo.attributes.position;
+      const lxy=new Float32Array(lpos.count*2);
+      for(let i=0;i<lpos.count;i++){lxy[i*2]=lpos.getX(i);lxy[i*2+1]=lpos.getY(i);}
       const fpMat=new THREE.MeshPhysicalMaterial({
-        color:ess?0xFF4455:0x3A90FF,
+        color:ess?0xFF3344:0x2A8AFF,
         transparent:true,opacity:0,depthWrite:false,
-        clearcoat:1.0,clearcoatRoughness:.04,
-        metalness:.12,roughness:.06,
+        clearcoat:1.0,clearcoatRoughness:.03,
+        metalness:.18,roughness:.04,
         side:THREE.DoubleSide
       });
       const fp=new THREE.Mesh(fpGeo,fpMat);
       fp.rotation.x=-Math.PI/2;fp.position.y=fy;fp.renderOrder=2;
       m.add(fp);
-      m.userData.liquid={mesh:fp,baseY:fy,level:flv,
-        pA:Math.random()*Math.PI*2, pB:Math.random()*Math.PI*2};
+      m.userData.liquid={
+        mesh:fp,geo:fpGeo,lxy,baseY:fy,level:flv,
+        pA:Math.random()*Math.PI*2,pB:Math.random()*Math.PI*2,
+        pC:Math.random()*Math.PI*2,pD:Math.random()*Math.PI*2
+      };
       m.userData.phase=Math.random()*Math.PI*2;
       m.userData.phase2=Math.random()*Math.PI*2;
     }
@@ -1626,21 +1634,37 @@ function animate(){
     }
     if(pr&&m.userData.liquid){
       const lq=m.userData.liquid;
-      /* oscillation : deux fréquences désynchronisées = sloshing naturel */
-      const wave=Math.sin(tm*1.1+lq.pA)*.013+Math.sin(tm*2.4+lq.pB)*.005;
-      lq.mesh.position.y=lq.baseY+wave;
-      /* tilt léger (inclinaison surface) basé sur l'inertie de rotation */
-      lq.mesh.rotation.z=rotV.vx*.18;
-      lq.mesh.rotation.x=-Math.PI/2+rotV.vy*.12;
-      /* opacité suit la visibilité du cube */
-      const tLiq=T.opacity>0.3?(ess?.62:.52):0;
+      /* ── Animation vertices : 4 ondes de directions/fréquences différentes ── */
+      const visible=lq.mesh.material.opacity>0.04;
+      if(visible){
+        const lpos=lq.geo.attributes.position;
+        const lxy=lq.lxy;
+        const amp=0.024*BOX;  /* amplitude des vagues */
+        for(let i=0;i<lpos.count;i++){
+          const vx=lxy[i*2], vy=lxy[i*2+1];
+          /* 4 ondes interférentes : direction, vitesse, fréquence spatiale différentes */
+          const wz=amp*(
+            .42*Math.sin(vx*5.8+tm*2.2+lq.pA)+
+            .32*Math.sin(vy*5.1+tm*1.7+lq.pB)+
+            .18*Math.sin((vx+vy)*3.8+tm*2.9+lq.pC)+
+            .12*Math.sin((vx-vy)*6.4+tm*1.4+lq.pD)+
+            .08*Math.sin(vx*9.2+tm*3.6+lq.pA*1.4)  /* micro-rides */
+          );
+          lpos.setZ(i,wz);
+        }
+        lpos.needsUpdate=true;
+        lq.geo.computeVertexNormals();  /* normales pour l'éclairage réaliste */
+      }
+      /* tilt physique lors de la rotation du cube */
+      lq.mesh.rotation.z=rotV.vx*.22;
+      lq.mesh.rotation.x=-Math.PI/2+rotV.vy*.15;
+      lq.mesh.position.y=lq.baseY;
+      /* opacité suit la visibilité */
+      const tLiq=T.opacity>0.3?(ess?.65:.55):0;
       lq.mesh.material.opacity+=(tLiq-lq.mesh.material.opacity)*dt;
-      /* couleur : bleu ou rouge selon état */
-      m.userData._lcol=m.userData._lcol||new THREE.Color(ess?0xFF4455:0x3A90FF);
-      m.userData._lcol.set(ess?0xFF4455:0x3A90FF).lerp(RED_C,T.red*.6);
+      m.userData._lcol=m.userData._lcol||new THREE.Color(ess?0xFF3344:0x2A8AFF);
+      m.userData._lcol.set(ess?0xFF3344:0x2A8AFF).lerp(RED_C,T.red*.5);
       lq.mesh.material.color.lerp(m.userData._lcol,dt);
-      /* intensité clearcoat pulse légèrement */
-      lq.mesh.material.clearcoatRoughness=.04+Math.abs(wave)*.8;
     }
   });
 
