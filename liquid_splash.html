@@ -57,13 +57,16 @@ const url=new URLSearchParams(location.search);
 const IS_TOUCH=matchMedia('(pointer:coarse)').matches;
 const G=Math.max(24,Math.min(64,parseInt(url.get('g'))||(IS_TOUCH?38:48))); // grille G³
 const CUBE_W=3.0;                          // taille monde du cube visible
+const INNER_RATIO=.86;                     // cavité : le liquide vit dans 86 % du cube
+const INNER_W=CUBE_W*INNER_RATIO;          // → épaisseur de verre visible sur les parois
+const Y_LIFT=CUBE_W*.035;                  // cavité surélevée : fond de verre épais
 const WALL_MIN=3.0,WALL_MAX=G-4.0;         // murs sim (cf. g2p Splash)
-const SCALE=CUBE_W/(WALL_MAX-WALL_MIN+1);  // grille → monde
+const SCALE=INNER_W/(WALL_MAX-WALL_MIN+1); // grille → monde (cavité interne)
 const BOX_C=(WALL_MIN+WALL_MAX)/2;         // centre grille
 const P_RADIUS=0.62;                       // rayon particule (unités grille)
 const DIAM_W=2*P_RADIUS*SCALE;             // diamètre monde/vue
 const FOV=38*Math.PI/180;
-const DT=0.25,SUBSTEPS=2,GRAV=0.8;
+const DT=0.22,SUBSTEPS=2,GRAV=0.72;
 const FILL_H=0.44,SPACING=0.70;
 const FIXED_POINT=1e7;
 
@@ -238,6 +241,7 @@ struct SimU{gravity:vec3f, phase:f32, impulse:vec3f, pad:f32}
       var v:vec3f=vec3f(decodeFixedPoint(cells[id.x].vx),
         decodeFixedPoint(cells[id.x].vy),decodeFixedPoint(cells[id.x].vz));
       v/=decodeFixedPoint(cells[id.x].mass);
+      v*=.995;   // amortissement doux : calme le pompage vertical, épaissit le liquide
       let x:i32=i32(id.x)/i32(initBoxSize.z)/i32(initBoxSize.y);
       let y:i32=(i32(id.x)/i32(initBoxSize.z))%i32(initBoxSize.y);
       let z:i32=i32(id.x)%i32(initBoxSize.z);
@@ -672,8 +676,8 @@ device.queue.writeBuffer(dirYBuf,0,new Float32Array([0,1]));
 const GLOW_N=2;
 const glowData=new Float32Array(GLOW_N*8);
 const glowVB=device.createBuffer({size:glowData.byteLength,usage:GPUBufferUsage.VERTEX|GPUBufferUsage.COPY_DST});
-/* arêtes : 24 instances (12 halo + 12 cœur), 48 o/instance */
-const EDGE_N=24;
+/* arêtes : 36 instances (12 halo + 12 cœur + 12 cavité interne), 48 o/instance */
+const EDGE_N=36;
 const edgeData=new Float32Array(EDGE_N*12);
 const edgeVB=device.createBuffer({size:edgeData.byteLength,usage:GPUBufferUsage.VERTEX|GPUBufferUsage.COPY_DST});
 const EDGE_PAIRS=[];
@@ -698,7 +702,7 @@ function makePipelines(){
   pipes.clear=device.createComputePipeline({layout:auto,compute:{module:simMod.clear,entryPoint:'clearGrid'}});
   pipes.p2g1=device.createComputePipeline({layout:auto,compute:{module:simMod.p2g1,entryPoint:'p2g_1',constants:FP}});
   pipes.p2g2=device.createComputePipeline({layout:auto,compute:{module:simMod.p2g2,entryPoint:'p2g_2',
-    constants:{...FP,stiffness:50,restDensity:3,dynamicViscosity:.1}}});
+    constants:{...FP,stiffness:50,restDensity:3,dynamicViscosity:.3}}});
   pipes.upd=device.createComputePipeline({layout:auto,compute:{module:simMod.upd,entryPoint:'updateGrid',constants:FP}});
   pipes.g2p=device.createComputePipeline({layout:auto,compute:{module:simMod.g2p,entryPoint:'g2p',constants:FP}});
 
@@ -929,7 +933,7 @@ function applyPalette(){
   device.queue.writeBuffer(glassBuf,0,gl);
   updateEdgeInstances();
 }
-let edgeWorld=[];
+let edgeWorld=[],edgeInner=[];
 function updateEdgeInstances(){
   const dark=THEME==='dark'?1:0;
   const p=PALS[PAL_I],col=p.edge[dark];
@@ -940,6 +944,8 @@ function updateEdgeInstances(){
   for(const[a,b]of edgeWorld)put(a,b,dark?.052:.030,dark?.36:.30,col);              // halo
   const core=dark?[col[0]*.6+.4,col[1]*.6+.4,col[2]*.6+.4]:col;
   for(const[a,b]of edgeWorld)put(a,b,dark?.012:.007,dark?.85:.62,core);             // cœur
+  const inn=[col[0]*.8,col[1]*.8,col[2]*.8];                                        // cavité (verre interne)
+  for(const[a,b]of edgeInner)put(a,b,dark?.009:.005,dark?.16:.14,inn);
   device.queue.writeBuffer(edgeVB,0,edgeData);
 }
 
@@ -1020,9 +1026,9 @@ bakeEnv();
 resize();          // crée textures, pipelines, backdrop et bind groups
 /* recalcule les arêtes en coordonnées monde (rotation cube) */
 function computeEdges(R){
-  edgeWorld=EDGE_PAIRS.map(([a,b])=>[
-    m4xformDir(R,[a[0]*CUBE_W,a[1]*CUBE_W,a[2]*CUBE_W]),
-    m4xformDir(R,[b[0]*CUBE_W,b[1]*CUBE_W,b[2]*CUBE_W])]);
+  const mx=(p,s,lift)=>m4xformDir(R,[p[0]*s,p[1]*s+lift,p[2]*s]);
+  edgeWorld=EDGE_PAIRS.map(([a,b])=>[mx(a,CUBE_W,0),mx(b,CUBE_W,0)]);
+  edgeInner=EDGE_PAIRS.map(([a,b])=>[mx(a,INNER_W,Y_LIFT),mx(b,INNER_W,Y_LIFT)]);
 }
 computeEdges(m4rotXY(rot.x,rot.y));
 applyPalette();
@@ -1044,7 +1050,7 @@ function frame(now){
 
   /* rotation cube */
   if(!drag&&!autoRot){rot.y+=rVY;rot.x+=rVX;rVX*=.88;rVY*=.88}
-  if(autoRot){rot.y+=.0034*dtMs*.06;rot.x=.30+Math.sin(now*.00030)*.22}
+  if(autoRot){rot.y+=.0026*dtMs*.06;rot.x=.30+Math.sin(now*.00022)*.13}
   rot.x=Math.max(-1.35,Math.min(1.35,rot.x));
   dist+=(distT-dist)*.1;
 
@@ -1054,7 +1060,7 @@ function frame(now){
   {
     const s=SCALE;
     for(let c=0;c<3;c++)for(let r=0;r<3;r++)model[c*4+r]=R[c*4+r]*s;
-    const t=m4xformDir(R,[-BOX_C*s,-BOX_C*s,-BOX_C*s]);
+    const t=m4xformDir(R,[-BOX_C*s,-BOX_C*s+Y_LIFT,-BOX_C*s]);
     model[12]=t[0];model[13]=t[1];model[14]=t[2];model[15]=1;
   }
   const cubeM=new Float32Array(16);          // cube local ±.5 → monde
@@ -1076,7 +1082,7 @@ function frame(now){
   simuData[0]=gB[0]*GRAV;simuData[1]=gB[1]*GRAV;simuData[2]=gB[2]*GRAV;
   simuData[3]=Math.random()*6.28;
   if(impulseReq){
-    const iB=m4xformDir(Rt,[(Math.random()-.5)*3.2,3.2+Math.random()*1.4,(Math.random()-.5)*3.2]);
+    const iB=m4xformDir(Rt,[(Math.random()-.5)*2.6,2.8+Math.random()*1.2,(Math.random()-.5)*2.6]);
     simuData[4]=iB[0];simuData[5]=iB[1];simuData[6]=iB[2];impulseReq=0;
   }else{simuData[4]=0;simuData[5]=0;simuData[6]=0}
   device.queue.writeBuffer(simuBuf,0,simuData);
@@ -1154,7 +1160,7 @@ function frame(now){
     p.setPipeline(pipes.glassFront);p.setBindGroup(0,bgs.glassFront);
     p.setVertexBuffer(0,glassVB);p.setIndexBuffer(glassIB,'uint32');p.drawIndexed(glassIdxN);
     p.setPipeline(pipes.edgeOver);p.setBindGroup(0,bgs.edgeOver);
-    p.setVertexBuffer(0,edgeVB);p.draw(6,EDGE_N/2,0,EDGE_N/2); // cœurs seulement, en surimpression
+    p.setVertexBuffer(0,edgeVB);p.draw(6,12,0,12);             // cœurs externes seulement, en surimpression
     p.end();
   }
   device.queue.submit([enc.finish()]);
