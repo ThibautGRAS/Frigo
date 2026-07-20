@@ -1,0 +1,1164 @@
+<!DOCTYPE html><html lang="fr"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Cube Liquide · MLS-MPM WebGPU</title>
+<!--
+  Simulation de fluide MLS-MPM + rendu écran-espace (SSFR), portage WebGPU
+  inspiré de « Splash » de matsuoka-601 (https://github.com/matsuoka-601/Splash, MIT).
+  Kernels : clearGrid → p2g_1 → p2g_2 → updateGrid → g2p (point virgule fixe + atomics).
+  Rendu : depth billboards → narrow-range filter (1D×2 + 2D) → thickness ½-res + blur
+  gaussien → composite (normales depth, Beer-Lambert, Fresnel, cubemap, réfraction fond).
+  Habillage : cube lumineux unique, thème clair assorti à index.html (bascule sombre).
+-->
+<style>
+:root{--ink:#0B1F4E;--red:#EF3346}
+*{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{height:100%;overflow:hidden;overscroll-behavior:none;position:fixed;width:100%;touch-action:none;
+  background:linear-gradient(175deg,#F2F6FC 0%,#E6EEF8 35%,#D8E4F2 65%,#CDD9ED 100%)}
+body.dark{background:radial-gradient(120% 100% at 50% 40%,#0A1B38 0%,#010810 100%)}
+canvas{position:fixed;inset:0;width:100%;height:100%;display:block}
+#ui{position:fixed;bottom:calc(18px + env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);
+  display:flex;gap:9px;z-index:5}
+.b{background:rgba(255,255,255,.78);border:1px solid rgba(11,31,78,.16);color:#31518F;
+  font:700 9.5px/1 ui-monospace,Menlo,monospace;letter-spacing:1.8px;padding:11px 15px;border-radius:100px;
+  cursor:pointer;text-transform:uppercase;touch-action:manipulation;user-select:none;-webkit-user-select:none;
+  backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);white-space:nowrap;
+  transition:background .25s,color .25s,border-color .25s}
+.b:active{opacity:.6;transform:scale(.93)}
+body.dark .b{background:rgba(0,40,120,.30);border-color:rgba(40,110,255,.30);color:rgba(100,180,255,.92)}
+#i{position:fixed;top:calc(10px + env(safe-area-inset-top));right:14px;color:rgba(11,31,78,.34);
+  font:9.5px ui-monospace,Menlo,monospace;z-index:5;text-align:right}
+body.dark #i{color:rgba(40,120,255,.38)}
+#fb{position:fixed;inset:0;display:none;place-items:center;z-index:10;padding:28px;text-align:center}
+#fb .card{max-width:430px;background:rgba(255,255,255,.9);border:1px solid rgba(11,31,78,.14);
+  border-radius:18px;padding:30px 26px;color:var(--ink);font:14px/1.65 -apple-system,'Inter',sans-serif}
+#fb h2{font-size:16px;margin-bottom:10px}
+#fb a{display:inline-block;margin-top:16px;background:var(--red);color:#fff;text-decoration:none;
+  padding:11px 22px;border-radius:100px;font-weight:700;font-size:12.5px;letter-spacing:.8px}
+body.dark #fb .card{background:rgba(6,18,44,.92);border-color:rgba(60,130,255,.25);color:#BCD2F5}
+</style>
+</head><body>
+<canvas id="gpu"></canvas>
+<div id="i"></div>
+<div id="ui">
+  <button class="b" id="bS">💧 Splash</button>
+  <button class="b" id="bA">🌀 Auto</button>
+  <button class="b" id="bC">🎨 Teinte</button>
+  <button class="b" id="bT">🌓 Thème</button>
+</div>
+<div id="fb"><div class="card">
+  <h2>WebGPU indisponible</h2>
+  <div id="fbmsg">Ce navigateur ne supporte pas WebGPU (requis pour la simulation MLS-MPM
+  de ~80 000 particules). Sur iPad/iPhone&nbsp;: iOS 26+. Sur PC&nbsp;: Chrome ou Edge récent.</div>
+  <a href="liquid_test.html">Ouvrir la version WebGL (repli)</a>
+</div></div>
+<script type="module">
+/* ═════════════════════════ Paramètres ═════════════════════════ */
+const url=new URLSearchParams(location.search);
+const IS_TOUCH=matchMedia('(pointer:coarse)').matches;
+const G=Math.max(24,Math.min(64,parseInt(url.get('g'))||(IS_TOUCH?38:48))); // grille G³
+const CUBE_W=3.0;                          // taille monde du cube visible
+const WALL_MIN=3.0,WALL_MAX=G-4.0;         // murs sim (cf. g2p Splash)
+const SCALE=CUBE_W/(WALL_MAX-WALL_MIN+1);  // grille → monde
+const BOX_C=(WALL_MIN+WALL_MAX)/2;         // centre grille
+const P_RADIUS=0.62;                       // rayon particule (unités grille)
+const DIAM_W=2*P_RADIUS*SCALE;             // diamètre monde/vue
+const FOV=38*Math.PI/180;
+const DT=0.25,SUBSTEPS=2,GRAV=0.8;
+const FILL_H=0.44,SPACING=0.70;
+const FIXED_POINT=1e7;
+
+let THEME=url.get('theme')||'light';
+let PAL_I=(parseInt(url.get('pal'))||0)%4;
+const PALS=[
+ {name:'Bleu',   abs:[[1.90,.85,.18],[2.40,1.15,.26]], glow:[[.16,.32,.70],[.05,.18,.85]], gk:[.28,.58],
+  edge:[[.18,.30,.52],[.25,.63,1.0]]},
+ {name:'Cyan',   abs:[[1.80,.42,.38],[2.30,.50,.55]], glow:[[.10,.44,.62],[.02,.38,.60]], gk:[.20,.30],
+  edge:[[.14,.36,.46],[.15,.85,1.0]]},
+ {name:'Rouge',  abs:[[.22,2.4,2.7],[.30,3.0,3.3]],   glow:[[.66,.10,.14],[.60,.04,.08]], gk:[.24,.34],
+  edge:[[.52,.14,.19],[1.0,.30,.38]]},
+ {name:'Émeraude',abs:[[1.7,.30,1.25],[2.2,.38,1.7]], glow:[[.08,.52,.34],[.02,.46,.28]], gk:[.20,.30],
+  edge:[[.12,.40,.28],[.18,.95,.62]]},
+];
+const SUN_W=norm3([.45,.85,.42]);
+
+/* ═════════════════════════ mat4 (colonne-major) ═════════════════════════ */
+function norm3(v){const l=Math.hypot(v[0],v[1],v[2])||1;return[v[0]/l,v[1]/l,v[2]/l]}
+function m4mul(a,b){const o=new Float32Array(16);
+  for(let c=0;c<4;c++)for(let r=0;r<4;r++){let s=0;for(let k=0;k<4;k++)s+=a[k*4+r]*b[c*4+k];o[c*4+r]=s}
+  return o}
+function m4persp(fov,asp,n,f){const t=1/Math.tan(fov/2),o=new Float32Array(16);
+  o[0]=t/asp;o[5]=t;o[10]=f/(n-f);o[11]=-1;o[14]=n*f/(n-f);return o}
+function m4invPersp(p){const o=new Float32Array(16);
+  o[0]=1/p[0];o[5]=1/p[5];o[11]=1/p[14];o[14]=-1;o[15]=p[10]/p[14];return o}
+function m4lookAt(e,c,u){
+  const z=norm3([e[0]-c[0],e[1]-c[1],e[2]-c[2]]);
+  let x=[u[1]*z[2]-u[2]*z[1],u[2]*z[0]-u[0]*z[2],u[0]*z[1]-u[1]*z[0]];x=norm3(x);
+  const y=[z[1]*x[2]-z[2]*x[1],z[2]*x[0]-z[0]*x[2],z[0]*x[1]-z[1]*x[0]];
+  return new Float32Array([x[0],y[0],z[0],0,x[1],y[1],z[1],0,x[2],y[2],z[2],0,
+    -(x[0]*e[0]+x[1]*e[1]+x[2]*e[2]),-(y[0]*e[0]+y[1]*e[1]+y[2]*e[2]),-(z[0]*e[0]+z[1]*e[1]+z[2]*e[2]),1])}
+function m4invRigid(m){const o=new Float32Array(16);
+  for(let c=0;c<3;c++)for(let r=0;r<3;r++)o[c*4+r]=m[r*4+c];
+  o[12]=-(o[0]*m[12]+o[4]*m[13]+o[8]*m[14]);
+  o[13]=-(o[1]*m[12]+o[5]*m[13]+o[9]*m[14]);
+  o[14]=-(o[2]*m[12]+o[6]*m[13]+o[10]*m[14]);o[15]=1;return o}
+function m4rotXY(px,yw){const cx=Math.cos(px),sx=Math.sin(px),cy=Math.cos(yw),sy=Math.sin(yw);
+  /* R = Rx(pitch)·Ry(yaw) */
+  return new Float32Array([cy,sx*sy,-cx*sy,0, 0,cx,sx,0, sy,-sx*cy,cx*cy,0, 0,0,0,1])}
+function m4xform(m,v){return[m[0]*v[0]+m[4]*v[1]+m[8]*v[2]+m[12],
+  m[1]*v[0]+m[5]*v[1]+m[9]*v[2]+m[13], m[2]*v[0]+m[6]*v[1]+m[10]*v[2]+m[14]]}
+function m4xformDir(m,v){return[m[0]*v[0]+m[4]*v[1]+m[8]*v[2],
+  m[1]*v[0]+m[5]*v[1]+m[9]*v[2], m[2]*v[0]+m[6]*v[1]+m[10]*v[2]]}
+
+/* ═════════════════════════ WGSL ═════════════════════════ */
+const RU_WGSL=/*wgsl*/`
+struct RU{
+  texelSize:vec2f, sphereSize:f32, pad0:f32,
+  projectionMatrix:mat4x4f, invProjectionMatrix:mat4x4f,
+  viewModelMatrix:mat4x4f,   // grille → vue
+  invViewMatrix:mat4x4f,     // vue → monde
+  viewMatrix:mat4x4f,        // monde → vue
+  cubeMatrix:mat4x4f,        // cube local (±.5) → monde
+}`;
+const FSQ_WGSL=/*wgsl*/`
+struct FSOut{@builtin(position) position:vec4f, @location(0) uv:vec2f, @location(1) iuv:vec2f}
+override tw:f32; override th:f32;
+@vertex fn vs(@builtin(vertex_index) vi:u32)->FSOut{
+  var p=array(vec2f(-1,-1),vec2f(3,-1),vec2f(-1,3));
+  let pos=p[vi];
+  let uv=vec2f((pos.x+1)*.5, 1.-(pos.y+1)*.5);
+  return FSOut(vec4f(pos,0,1),uv,uv*vec2f(tw,th));
+}`;
+
+/* ---- Simulation MLS-MPM (d'après Splash/matsuoka-601, MIT) ---- */
+const SIM_COMMON=/*wgsl*/`
+struct Particle{position:vec3f, v:vec3f, C:mat3x3f}
+override fixedPointMultiplier:f32;
+fn encodeFixedPoint(f:f32)->i32{return i32(f*fixedPointMultiplier);}
+fn decodeFixedPoint(fp:i32)->f32{return f32(fp)*(1./fixedPointMultiplier);}`;
+
+const CLEAR_WGSL=/*wgsl*/`
+struct Cell{vx:i32,vy:i32,vz:i32,mass:i32}
+@group(0) @binding(0) var<storage,read_write> cells:array<Cell>;
+@compute @workgroup_size(64) fn clearGrid(@builtin(global_invocation_id) id:vec3u){
+  if(id.x<arrayLength(&cells)){cells[id.x]=Cell(0,0,0,0);}
+}`;
+
+const P2G1_WGSL=SIM_COMMON+/*wgsl*/`
+struct Cell{vx:atomic<i32>,vy:atomic<i32>,vz:atomic<i32>,mass:atomic<i32>}
+@group(0) @binding(0) var<storage,read> particles:array<Particle>;
+@group(0) @binding(1) var<storage,read_write> cells:array<Cell>;
+@group(0) @binding(2) var<uniform> initBoxSize:vec3f;
+@group(0) @binding(3) var<uniform> numParticles:u32;
+@compute @workgroup_size(64) fn p2g_1(@builtin(global_invocation_id) id:vec3u){
+  if(id.x<numParticles){
+    var weights:array<vec3f,3>;
+    let particle=particles[id.x];
+    let cellIndex:vec3f=floor(particle.position);
+    let cellDiff:vec3f=particle.position-(cellIndex+0.5);
+    weights[0]=0.5*(0.5-cellDiff)*(0.5-cellDiff);
+    weights[1]=0.75-cellDiff*cellDiff;
+    weights[2]=0.5*(0.5+cellDiff)*(0.5+cellDiff);
+    let C:mat3x3f=particle.C;
+    for(var gx=0;gx<3;gx++){for(var gy=0;gy<3;gy++){for(var gz=0;gz<3;gz++){
+      let weight:f32=weights[gx].x*weights[gy].y*weights[gz].z;
+      let cellX=vec3f(cellIndex.x+f32(gx)-1.,cellIndex.y+f32(gy)-1.,cellIndex.z+f32(gz)-1.);
+      let cellDist=(cellX+0.5)-particle.position;
+      let Q:vec3f=C*cellDist;
+      let massContrib:f32=weight;                    // masse particule = 1
+      let velContrib:vec3f=massContrib*(particle.v+Q);
+      let ci:i32=i32(cellX.x)*i32(initBoxSize.y)*i32(initBoxSize.z)+
+                 i32(cellX.y)*i32(initBoxSize.z)+i32(cellX.z);
+      atomicAdd(&cells[ci].mass,encodeFixedPoint(massContrib));
+      atomicAdd(&cells[ci].vx,encodeFixedPoint(velContrib.x));
+      atomicAdd(&cells[ci].vy,encodeFixedPoint(velContrib.y));
+      atomicAdd(&cells[ci].vz,encodeFixedPoint(velContrib.z));
+    }}}
+  }
+}`;
+
+const P2G2_WGSL=SIM_COMMON+/*wgsl*/`
+struct Cell{vx:atomic<i32>,vy:atomic<i32>,vz:atomic<i32>,mass:i32}
+override stiffness:f32; override restDensity:f32; override dynamicViscosity:f32;
+@group(0) @binding(0) var<storage,read> particles:array<Particle>;
+@group(0) @binding(1) var<storage,read_write> cells:array<Cell>;
+@group(0) @binding(2) var<uniform> initBoxSize:vec3f;
+@group(0) @binding(3) var<uniform> numParticles:u32;
+@group(0) @binding(4) var<storage,read_write> densities:array<f32>;
+@group(0) @binding(5) var<uniform> dt:f32;
+@compute @workgroup_size(64) fn p2g_2(@builtin(global_invocation_id) id:vec3u){
+  if(id.x<numParticles){
+    var weights:array<vec3f,3>;
+    let particle=particles[id.x];
+    let cellIndex:vec3f=floor(particle.position);
+    let cellDiff:vec3f=particle.position-(cellIndex+0.5);
+    weights[0]=0.5*(0.5-cellDiff)*(0.5-cellDiff);
+    weights[1]=0.75-cellDiff*cellDiff;
+    weights[2]=0.5*(0.5+cellDiff)*(0.5+cellDiff);
+    var density:f32=0.;
+    for(var gx=0;gx<3;gx++){for(var gy=0;gy<3;gy++){for(var gz=0;gz<3;gz++){
+      let weight:f32=weights[gx].x*weights[gy].y*weights[gz].z;
+      let cellX=vec3f(cellIndex.x+f32(gx)-1.,cellIndex.y+f32(gy)-1.,cellIndex.z+f32(gz)-1.);
+      let ci:i32=i32(cellX.x)*i32(initBoxSize.y)*i32(initBoxSize.z)+
+                 i32(cellX.y)*i32(initBoxSize.z)+i32(cellX.z);
+      density+=decodeFixedPoint(cells[ci].mass)*weight;
+    }}}
+    let volume:f32=1./density;
+    densities[id.x]=density;
+    let pressure:f32=max(-0.0,stiffness*(pow(density/restDensity,1.)-1.));
+    var stress:mat3x3f=mat3x3f(-pressure,0,0, 0,-pressure,0, 0,0,-pressure);
+    let dudv:mat3x3f=particle.C;
+    let strain:mat3x3f=dudv+transpose(dudv);
+    stress+=dynamicViscosity*strain;
+    let eq16=-volume*4.*stress*dt;
+    for(var gx=0;gx<3;gx++){for(var gy=0;gy<3;gy++){for(var gz=0;gz<3;gz++){
+      let weight:f32=weights[gx].x*weights[gy].y*weights[gz].z;
+      let cellX=vec3f(cellIndex.x+f32(gx)-1.,cellIndex.y+f32(gy)-1.,cellIndex.z+f32(gz)-1.);
+      let cellDist=(cellX+0.5)-particle.position;
+      let ci:i32=i32(cellX.x)*i32(initBoxSize.y)*i32(initBoxSize.z)+
+                 i32(cellX.y)*i32(initBoxSize.z)+i32(cellX.z);
+      let momentum:vec3f=eq16*weight*cellDist;
+      atomicAdd(&cells[ci].vx,encodeFixedPoint(momentum.x));
+      atomicAdd(&cells[ci].vy,encodeFixedPoint(momentum.y));
+      atomicAdd(&cells[ci].vz,encodeFixedPoint(momentum.z));
+    }}}
+  }
+}`;
+
+const UPDATE_WGSL=SIM_COMMON+/*wgsl*/`
+struct Cell{vx:i32,vy:i32,vz:i32,mass:i32}
+struct SimU{gravity:vec3f, phase:f32, impulse:vec3f, pad:f32}
+@group(0) @binding(0) var<storage,read_write> cells:array<Cell>;
+@group(0) @binding(1) var<uniform> realBoxSize:vec3f;
+@group(0) @binding(2) var<uniform> initBoxSize:vec3f;
+@group(0) @binding(3) var<uniform> simu:SimU;
+@group(0) @binding(4) var<uniform> dt:f32;
+@compute @workgroup_size(64) fn updateGrid(@builtin(global_invocation_id) id:vec3u){
+  if(id.x<arrayLength(&cells)){
+    if(cells[id.x].mass>0){
+      var v:vec3f=vec3f(decodeFixedPoint(cells[id.x].vx),
+        decodeFixedPoint(cells[id.x].vy),decodeFixedPoint(cells[id.x].vz));
+      v/=decodeFixedPoint(cells[id.x].mass);
+      let x:i32=i32(id.x)/i32(initBoxSize.z)/i32(initBoxSize.y);
+      let y:i32=(i32(id.x)/i32(initBoxSize.z))%i32(initBoxSize.y);
+      let z:i32=i32(id.x)%i32(initBoxSize.z);
+      /* gravité locale (cube tourné) */
+      v+=simu.gravity*dt;
+      /* impulsion « splash » : kick spatialement modulé */
+      let sp=0.5+0.5*sin(f32(x)*.53+f32(y)*.37+f32(z)*.71+simu.phase);
+      v+=simu.impulse*sp;
+      cells[id.x].vx=encodeFixedPoint(v.x);
+      cells[id.x].vy=encodeFixedPoint(v.y);
+      cells[id.x].vz=encodeFixedPoint(v.z);
+      if(x<2||x>i32(ceil(realBoxSize.x)-3)){cells[id.x].vx=0;}
+      if(y<2||y>i32(ceil(realBoxSize.y)-3)){cells[id.x].vy=0;}
+      if(z<2||z>i32(ceil(realBoxSize.z)-3)){cells[id.x].vz=0;}
+    }
+  }
+}`;
+
+const G2P_WGSL=SIM_COMMON+/*wgsl*/`
+struct Cell{vx:i32,vy:i32,vz:i32,mass:i32}
+@group(0) @binding(0) var<storage,read_write> particles:array<Particle>;
+@group(0) @binding(1) var<storage,read> cells:array<Cell>;
+@group(0) @binding(2) var<uniform> realBoxSize:vec3f;
+@group(0) @binding(3) var<uniform> initBoxSize:vec3f;
+@group(0) @binding(4) var<uniform> numParticles:u32;
+@group(0) @binding(5) var<uniform> dt:f32;
+@compute @workgroup_size(64) fn g2p(@builtin(global_invocation_id) id:vec3u){
+  if(id.x<numParticles){
+    particles[id.x].v=vec3f(0.);
+    var weights:array<vec3f,3>;
+    let particle=particles[id.x];
+    let cellIndex:vec3f=floor(particle.position);
+    let cellDiff:vec3f=particle.position-(cellIndex+0.5);
+    weights[0]=0.5*(0.5-cellDiff)*(0.5-cellDiff);
+    weights[1]=0.75-cellDiff*cellDiff;
+    weights[2]=0.5*(0.5+cellDiff)*(0.5+cellDiff);
+    var B:mat3x3f=mat3x3f(vec3f(0.),vec3f(0.),vec3f(0.));
+    for(var gx=0;gx<3;gx++){for(var gy=0;gy<3;gy++){for(var gz=0;gz<3;gz++){
+      let weight:f32=weights[gx].x*weights[gy].y*weights[gz].z;
+      let cellX=vec3f(cellIndex.x+f32(gx)-1.,cellIndex.y+f32(gy)-1.,cellIndex.z+f32(gz)-1.);
+      let cellDist:vec3f=(cellX+0.5)-particle.position;
+      let ci:i32=i32(cellX.x)*i32(initBoxSize.y)*i32(initBoxSize.z)+
+                 i32(cellX.y)*i32(initBoxSize.z)+i32(cellX.z);
+      let wv:vec3f=vec3f(decodeFixedPoint(cells[ci].vx),
+        decodeFixedPoint(cells[ci].vy),decodeFixedPoint(cells[ci].vz))*weight;
+      B+=mat3x3f(wv*cellDist.x,wv*cellDist.y,wv*cellDist.z);
+      particles[id.x].v+=wv;
+    }}}
+    particles[id.x].C=B*4.;
+    particles[id.x].position+=particles[id.x].v*dt;
+    particles[id.x].position=vec3f(
+      clamp(particles[id.x].position.x,1.,realBoxSize.x-2.),
+      clamp(particles[id.x].position.y,1.,realBoxSize.y-2.),
+      clamp(particles[id.x].position.z,1.,realBoxSize.z-2.));
+    /* murs élastiques (prédiction k=2, raideur 1) — symétriques sur les 6 faces */
+    let k=2.0; let wallStiffness=1.0;
+    let xN:vec3f=particles[id.x].position+particles[id.x].v*dt*k;
+    let wallMin:vec3f=vec3f(3.);
+    let wallMax:vec3f=realBoxSize-4.;
+    if(xN.x<wallMin.x){particles[id.x].v.x+=wallStiffness*(wallMin.x-xN.x);}
+    if(xN.x>wallMax.x){particles[id.x].v.x+=wallStiffness*(wallMax.x-xN.x);}
+    if(xN.y<wallMin.y){particles[id.x].v.y+=wallStiffness*(wallMin.y-xN.y);}
+    if(xN.y>wallMax.y){particles[id.x].v.y+=wallStiffness*(wallMax.y-xN.y);}
+    if(xN.z<wallMin.z){particles[id.x].v.z+=wallStiffness*(wallMin.z-xN.z);}
+    if(xN.z>wallMax.z){particles[id.x].v.z+=wallStiffness*(wallMax.z-xN.z);}
+  }
+}`;
+
+/* ---- Depth pass : billboards sphériques ---- */
+const DEPTH_WGSL=RU_WGSL+/*wgsl*/`
+struct Particle{position:vec3f, v:vec3f, C:mat3x3f}
+struct VSOut{@builtin(position) position:vec4f, @location(0) uv:vec2f, @location(1) viewPosition:vec3f}
+struct FSOut{@location(0) depth:f32, @builtin(frag_depth) fragDepth:f32}
+@group(0) @binding(0) var<storage,read> particles:array<Particle>;
+@group(0) @binding(1) var<uniform> ru:RU;
+@vertex fn vs(@builtin(vertex_index) vi:u32, @builtin(instance_index) ii:u32)->VSOut{
+  var corners=array(vec2f(.5,.5),vec2f(.5,-.5),vec2f(-.5,-.5),vec2f(.5,.5),vec2f(-.5,-.5),vec2f(-.5,.5));
+  let corner=vec3f(corners[vi]*ru.sphereSize,0.);
+  let uv=corners[vi]+0.5;
+  let viewPos=(ru.viewModelMatrix*vec4f(particles[ii].position,1.)).xyz;
+  return VSOut(ru.projectionMatrix*vec4f(viewPos+corner,1.),uv,viewPos);
+}
+@fragment fn fs(in:VSOut)->FSOut{
+  var out:FSOut;
+  let nxy:vec2f=in.uv*2.-1.;
+  let r2=dot(nxy,nxy);
+  if(r2>1.){discard;}
+  let normal=vec3f(nxy,sqrt(1.-r2));
+  let radius=ru.sphereSize/2.;
+  let realViewPos=vec4f(in.viewPosition+normal*radius,1.);
+  let clip=ru.projectionMatrix*realViewPos;
+  out.fragDepth=clip.z/clip.w;
+  out.depth=realViewPos.z;
+  return out;
+}`;
+
+/* ---- Narrow-range filter (Truong & Yuksel) — 1D séparable + passe 2D ---- */
+const NRF_WGSL=FSQ_WGSL+/*wgsl*/`
+@group(0) @binding(0) var depthTexture:texture_2d<f32>;
+@group(0) @binding(1) var<uniform> blurDir:vec2f;
+override projectedParticleConstant:f32;
+override maxFilterSize:f32;
+override blur2D:u32;
+override depthThreshold:f32;
+override muK:f32;
+@fragment fn fs(in:FSOut)->@location(0) vec4f{
+  let depth:f32=abs(textureLoad(depthTexture,vec2u(in.iuv),0).r);
+  if(depth>=1e4){return vec4f(vec3f(depth),1.);}
+  let filterSize:i32=min(i32(maxFilterSize),i32(ceil(projectedParticleConstant/depth)));
+  let sigma:f32=f32(filterSize)/2.;
+  let sigmaSquareInv:f32=1./(2.*sigma*sigma);
+  let higherDepthBound=depth+muK;
+  var sum:f32=depth; var wsum:f32=1.;
+  if(blur2D==0u){
+    var sum2=vec2f(0.); var wsum2=vec2f(0.);
+    var tLoX=depth-depthThreshold; var tHiX=depth+depthThreshold;
+    var tLoY=depth-depthThreshold; var tHiY=depth+depthThreshold;
+    for(var r:i32=1;r<=filterSize;r++){
+      let gw:f32=exp(-f32(r*r)*sigmaSquareInv);
+      var dX:f32=abs(textureLoad(depthTexture,vec2u(in.iuv-vec2f(f32(r))*blurDir),0).r);
+      var dY:f32=abs(textureLoad(depthTexture,vec2u(in.iuv+vec2f(f32(r))*blurDir),0).r);
+      var w=vec2f(gw);
+      if(dX<tLoX){w=vec2f(0.);}
+      else{if(dX>tHiX){dX=higherDepthBound;}
+        else{tLoX=min(tLoX,dX-depthThreshold);tHiX=max(tHiX,dX+depthThreshold);}}
+      if(dY<tLoY){w=vec2f(0.);}
+      else{if(dY>tHiY){dY=higherDepthBound;}
+        else{tLoY=min(tLoY,dY-depthThreshold);tHiY=max(tHiY,dY+depthThreshold);}}
+      sum2+=vec2f(dX,dY)*w; wsum2+=w;
+    }
+    sum+=sum2.x+sum2.y; wsum+=wsum2.x+wsum2.y;
+  }else{
+    var tLo=depth-depthThreshold; var tHi=depth+depthThreshold;
+    var sum4=vec4f(0.); var wsum4=vec4f(0.);
+    for(var r:i32=1;r<=2;r++){
+      for(var i:i32=0;i<2*r;i++){
+        let gw=exp((-f32(r*r)+f32((r-i)*(r-i)))*sigmaSquareInv);
+        var dA:f32=abs(textureLoad(depthTexture,vec2u(in.iuv-vec2f(f32(r),f32(r-i))),0).r);
+        var dB:f32=abs(textureLoad(depthTexture,vec2u(in.iuv+vec2f(f32(r),f32(r-i))),0).r);
+        var dC:f32=abs(textureLoad(depthTexture,vec2u(in.iuv-vec2f(f32(r-i),f32(r))),0).r);
+        var dD:f32=abs(textureLoad(depthTexture,vec2u(in.iuv+vec2f(f32(r-i),f32(r))),0).r);
+        var w=vec4f(gw);
+        if(dA<tLo){w.x=0.;w.y=0.;}else{if(dA>tHi){dA=higherDepthBound;}
+          else{tLo=min(tLo,dA-depthThreshold);tHi=max(tHi,dA+depthThreshold);}}
+        if(dB<tLo){w.x=0.;w.y=0.;}else{if(dB>tHi){dB=higherDepthBound;}
+          else{tLo=min(tLo,dB-depthThreshold);tHi=max(tHi,dB+depthThreshold);}}
+        if(dC<tLo){w.z=0.;w.w=0.;}else{if(dC>tHi){dC=higherDepthBound;}
+          else{tLo=min(tLo,dC-depthThreshold);tHi=max(tHi,dC+depthThreshold);}}
+        if(dD<tLo){w.z=0.;w.w=0.;}else{if(dD>tHi){dD=higherDepthBound;}
+          else{tLo=min(tLo,dD-depthThreshold);tHi=max(tHi,dD+depthThreshold);}}
+        sum4+=vec4f(dA,dB,dC,dD)*w; wsum4+=w;
+      }
+    }
+    sum+=sum4.x+sum4.y+sum4.z+sum4.w; wsum+=wsum4.x+wsum4.y+wsum4.z+wsum4.w;
+  }
+  return vec4f(sum/wsum,0.,0.,1.);
+}`;
+
+/* ---- Thickness pass (additif, ½-res) ---- */
+const THICK_WGSL=RU_WGSL+/*wgsl*/`
+struct Particle{position:vec3f, v:vec3f, C:mat3x3f}
+struct VSOut{@builtin(position) position:vec4f, @location(0) uv:vec2f}
+@group(0) @binding(0) var<storage,read> particles:array<Particle>;
+@group(0) @binding(1) var<uniform> ru:RU;
+@vertex fn vs(@builtin(vertex_index) vi:u32, @builtin(instance_index) ii:u32)->VSOut{
+  var corners=array(vec2f(.5,.5),vec2f(.5,-.5),vec2f(-.5,-.5),vec2f(.5,.5),vec2f(-.5,-.5),vec2f(-.5,.5));
+  let corner=vec3f(corners[vi]*ru.sphereSize,0.);
+  let uv=corners[vi]+0.5;
+  let viewPos=(ru.viewModelMatrix*vec4f(particles[ii].position,1.)).xyz;
+  return VSOut(ru.projectionMatrix*vec4f(viewPos+corner,1.),uv);
+}
+@fragment fn fs(in:VSOut)->@location(0) vec4f{
+  let nxy:vec2f=in.uv*2.-1.;
+  let r2=dot(nxy,nxy);
+  if(r2>1.){discard;}
+  return vec4f(vec3f(0.05*sqrt(1.-r2)),1.);
+}`;
+
+/* ---- Blur gaussien (thickness) ---- */
+const GAUSS_WGSL=FSQ_WGSL+/*wgsl*/`
+@group(0) @binding(0) var textureSampler:sampler;
+@group(0) @binding(1) var tex:texture_2d<f32>;
+@group(0) @binding(2) var<uniform> blurDir:vec2f;
+override filterSize:i32;
+@fragment fn fs(in:FSOut)->@location(0) vec4f{
+  var thickness:f32=textureSample(tex,textureSampler,in.uv).r;
+  if(thickness==0.){return vec4f(0.,0.,0.,1.);}
+  let sigma:f32=f32(filterSize)/3.;
+  let sigmaSquareInv:f32=1./(2.*sigma*sigma);
+  var sum=thickness; var wsum=1.;
+  for(var x:i32=1;x<=filterSize;x++){
+    let l:f32=textureLoad(tex,vec2u(in.iuv-blurDir*f32(x)),0).r;
+    let r:f32=textureLoad(tex,vec2u(in.iuv+blurDir*f32(x)),0).r;
+    let w:f32=exp(-f32(x*x)*sigmaSquareInv);
+    sum+=(l+r)*w; wsum+=2.*w;
+  }
+  return vec4f(sum/wsum,0.,0.,1.);
+}`;
+
+/* ---- Composite final : normales + Beer-Lambert + Fresnel + réfraction fond ---- */
+const FLUID_WGSL=RU_WGSL+FSQ_WGSL+/*wgsl*/`
+struct Pal{
+  absorb:vec3f, absScale:f32,
+  glow:vec3f, glowK:f32,
+  reflTint:vec3f, fresnelBoost:f32,
+  sunDir:vec3f, refrStrength:f32,
+  sunColor:vec3f, specPow:f32,
+  edgeSoft:f32, iorInv:f32, thickBoost:f32, pad:f32,
+}
+@group(0) @binding(0) var textureSampler:sampler;
+@group(0) @binding(1) var depthTexture:texture_2d<f32>;
+@group(0) @binding(2) var<uniform> ru:RU;
+@group(0) @binding(3) var thicknessTexture:texture_2d<f32>;
+@group(0) @binding(4) var envmapTexture:texture_cube<f32>;
+@group(0) @binding(5) var bgTexture:texture_2d<f32>;
+@group(0) @binding(6) var<uniform> pal:Pal;
+fn computeViewPosFromUVDepth(uv:vec2f,depth:f32)->vec3f{
+  var ndc=vec4f(uv.x*2.-1., 1.-2.*uv.y, 0., 1.);
+  ndc.z=-ru.projectionMatrix[2].z+ru.projectionMatrix[3].z/depth;
+  let eye=ru.invProjectionMatrix*ndc;
+  return eye.xyz/eye.w;
+}
+fn getViewPos(uv:vec2f,iuv:vec2f)->vec3f{
+  let d:f32=abs(textureLoad(depthTexture,vec2u(iuv),0).x);
+  return computeViewPosFromUVDepth(uv,d);
+}
+fn gamma(v:vec3f)->vec3f{return pow(max(v,vec3f(0.)),vec3f(1./2.2));}
+fn invGamma(v:vec3f)->vec3f{return pow(max(v,vec3f(0.)),vec3f(2.2));}
+fn refractUV(surfView:vec3f,refrDirView:vec3f,thickness:f32)->vec2f{
+  let exitView:vec3f=surfView+refrDirView*thickness*pal.refrStrength;
+  let clip:vec4f=ru.projectionMatrix*vec4f(exitView,1.);
+  let ndc:vec3f=clip.xyz/clip.w;
+  return clamp(vec2f((1.+ndc.x)/2.,(1.-ndc.y)/2.),vec2f(0.001),vec2f(0.999));
+}
+@fragment fn fs(in:FSOut)->@location(0) vec4f{
+  let depth:f32=abs(textureLoad(depthTexture,vec2u(in.iuv),0).r);
+  let bg:vec3f=textureSampleLevel(bgTexture,textureSampler,in.uv,0.).rgb;
+  if(depth>=1e4){return vec4f(bg,1.);}
+  var thickness:f32=textureSampleLevel(thicknessTexture,textureSampler,in.uv,0.).r*pal.thickBoost;
+  let surfView=computeViewPosFromUVDepth(in.uv,depth);
+  /* normales par différences vue-espace (variante 4 prélèvements de Splash) */
+  var ddx:vec3f=getViewPos(in.uv+vec2f(ru.texelSize.x,0.),in.iuv+vec2f(1.,0.))-surfView;
+  var ddy:vec3f=getViewPos(in.uv+vec2f(0.,ru.texelSize.y),in.iuv+vec2f(0.,1.))-surfView;
+  let ddx2:vec3f=surfView-getViewPos(in.uv-vec2f(ru.texelSize.x,0.),in.iuv-vec2f(1.,0.));
+  let ddy2:vec3f=surfView-getViewPos(in.uv-vec2f(0.,ru.texelSize.y),in.iuv-vec2f(0.,1.));
+  ddx=select(ddx,ddx2,abs(ddx.z)>abs(ddx2.z));
+  ddy=select(ddy,ddy2,abs(ddy.z)>abs(ddy2.z));
+  let normal:vec3f=-normalize(cross(ddx,ddy));
+  let rayDir=normalize(surfView);
+  let sunView=normalize((ru.viewMatrix*vec4f(pal.sunDir,0.)).xyz);
+  let H:vec3f=normalize(sunView-rayDir);
+  let specular:f32=pow(max(0.,dot(H,normal)),pal.specPow);
+  /* réfraction : point de sortie projeté → échantillon du fond (montre les arêtes) */
+  let refrDirView:vec3f=normalize(refract(rayDir,normal,pal.iorInv));
+  let ruv=refractUV(surfView,refrDirView,thickness);
+  let bgRefr:vec3f=invGamma(textureSampleLevel(bgTexture,textureSampler,ruv,0.).rgb);
+  /* Beer-Lambert */
+  let transmittance:vec3f=exp(-pal.absorb*pal.absScale*max(thickness,.003));
+  var refracted:vec3f=bgRefr*transmittance+pal.glow*pal.glowK*(1.-transmittance);
+  /* réflexion cubemap + Fresnel */
+  let reflDirView:vec3f=reflect(rayDir,normal);
+  let reflDirWorld:vec3f=normalize((ru.invViewMatrix*vec4f(reflDirView,0.)).xyz);
+  let reflection:vec3f=invGamma(textureSampleLevel(envmapTexture,textureSampler,reflDirWorld,0.).rgb)*pal.reflTint;
+  let F0=0.02;
+  let fresnel:f32=clamp((F0+(1.-F0)*pow(1.-max(0.,dot(normal,-rayDir)),5.))*pal.fresnelBoost,0.,1.);
+  var col:vec3f=mix(refracted,reflection,fresnel)+pal.sunColor*specular;
+  /* bord doux : fondu vers le fond quand l'épaisseur devient infime */
+  let edge:f32=smoothstep(0.,pal.edgeSoft,thickness);
+  col=mix(invGamma(bg),col,edge);
+  return vec4f(gamma(col),1.);
+}`;
+
+/* ---- Fond (backdrop plein écran, texture pré-peinte) ---- */
+const BACKDROP_WGSL=FSQ_WGSL+/*wgsl*/`
+@group(0) @binding(0) var textureSampler:sampler;
+@group(0) @binding(1) var tex:texture_2d<f32>;
+@fragment fn fs(in:FSOut)->@location(0) vec4f{
+  return vec4f(textureSampleLevel(tex,textureSampler,in.uv,0.).rgb,1.);
+}`;
+
+/* ---- Faces verre du cube ---- */
+const GLASS_WGSL=RU_WGSL+/*wgsl*/`
+struct GlassU{tint:vec3f,baseA:f32, rim:vec3f,rimA:f32, sheen:vec3f,sheenK:f32, time:f32,p0:f32,p1:f32,p2:f32}
+struct VSOut{@builtin(position) position:vec4f, @location(0) nrm:vec3f, @location(1) wpos:vec3f}
+@group(0) @binding(0) var<uniform> ru:RU;
+@group(0) @binding(1) var<uniform> gu:GlassU;
+@vertex fn vs(@location(0) pos:vec3f, @location(1) nrm:vec3f)->VSOut{
+  let w=(ru.cubeMatrix*vec4f(pos,1.)).xyz;
+  let n=normalize((ru.cubeMatrix*vec4f(nrm,0.)).xyz);
+  return VSOut(ru.projectionMatrix*ru.viewMatrix*vec4f(w,1.),n,w);
+}
+@fragment fn fs(in:VSOut)->@location(0) vec4f{
+  let eye=(ru.invViewMatrix*vec4f(0.,0.,0.,1.)).xyz;
+  let v=normalize(eye-in.wpos);
+  let n=normalize(in.nrm);
+  let rim=pow(1.-abs(dot(n,v)),2.6);
+  /* reflet balayant (vernis) */
+  let gl=normalize(vec3f(cos(gu.time*.35)*.7,.75,sin(gu.time*.35)*.7));
+  let sheen=pow(max(0.,dot(reflect(-gl,n),v)),46.)*gu.sheenK;
+  let col=gu.tint*gu.baseA+gu.rim*rim*gu.rimA+gu.sheen*sheen;
+  let a=clamp(gu.baseA+rim*gu.rimA+sheen*.5,0.,1.);
+  return vec4f(col,a);
+}`;
+
+/* ---- Halos internes : le « cœur lumineux » du cube (billboards additifs) ---- */
+const GLOW_WGSL=RU_WGSL+/*wgsl*/`
+struct VSOut{@builtin(position) position:vec4f, @location(0) q:vec2f,
+  @location(1) color:vec3f, @location(2) alpha:f32}
+@group(0) @binding(0) var<uniform> ru:RU;
+@vertex fn vs(@builtin(vertex_index) vi:u32,
+  @location(0) P:vec3f, @location(1) size:f32,
+  @location(2) color:vec3f, @location(3) alpha:f32)->VSOut{
+  var corners=array(vec2f(-1,-1),vec2f(1,-1),vec2f(1,1),vec2f(-1,-1),vec2f(1,1),vec2f(-1,1));
+  let c=corners[vi];
+  let vp=(ru.viewMatrix*vec4f(P,1.)).xyz+vec3f(c*size,0.);
+  return VSOut(ru.projectionMatrix*vec4f(vp,1.),c,color,alpha);
+}
+@fragment fn fs(in:VSOut)->@location(0) vec4f{
+  let d2=dot(in.q,in.q);
+  let g=exp(-d2*3.4);
+  return vec4f(in.color*g*in.alpha,g*in.alpha);
+}`;
+
+/* ---- Arêtes lumineuses : rubans additifs à atténuation gaussienne ---- */
+const EDGE_WGSL=RU_WGSL+/*wgsl*/`
+struct VSOut{@builtin(position) position:vec4f, @location(0) sq:vec2f,
+  @location(1) color:vec3f, @location(2) alpha:f32}
+@group(0) @binding(0) var<uniform> ru:RU;
+@vertex fn vs(@builtin(vertex_index) vi:u32,
+  @location(0) A:vec3f, @location(1) w:f32,
+  @location(2) B:vec3f, @location(3) alpha:f32,
+  @location(4) color:vec3f)->VSOut{
+  var corners=array(vec2f(0.,-1.),vec2f(1.,-1.),vec2f(1.,1.),vec2f(0.,-1.),vec2f(1.,1.),vec2f(0.,1.));
+  let c=corners[vi];
+  let vA=(ru.viewMatrix*vec4f(A,1.)).xyz;
+  let vB=(ru.viewMatrix*vec4f(B,1.)).xyz;
+  let p=mix(vA,vB,c.x);
+  var e=vB-vA;
+  let eLen=max(length(e),1e-5);
+  e/=eLen;
+  let toCam=-normalize(p);
+  var side=cross(e,toCam);
+  let sLen=max(length(side),1e-4);
+  side/=sLen;
+  /* extension aux extrémités pour des bouts arrondis */
+  let ext=e*w*select(-1.,1.,c.x>.5);
+  let pos=p+side*c.y*w+ext;
+  /* coordonnée locale : x le long (avec débord), y transverse */
+  let lx=(c.x*(eLen+2.*w)-w)/eLen;
+  return VSOut(ru.projectionMatrix*vec4f(pos,1.),vec2f(lx,c.y),color,alpha);
+}
+@fragment fn fs(in:VSOut)->@location(0) vec4f{
+  /* distance au segment [0,1] en coordonnée locale → gaussienne */
+  let dx=max(max(-in.sq.x,in.sq.x-1.),0.)*2.6;
+  let d2=in.sq.y*in.sq.y+dx*dx;
+  let g=exp(-d2*4.2);
+  return vec4f(in.color*g*in.alpha,g*in.alpha);
+}`;
+
+/* ═════════════════════════ Initialisation WebGPU ═════════════════════════ */
+const cv=document.getElementById('gpu');
+const fbEl=document.getElementById('fb');
+function fail(msg){
+  fbEl.style.display='grid';
+  if(msg)document.getElementById('fbmsg').textContent=msg;
+  document.getElementById('ui').style.display='none';
+}
+if(THEME==='dark')document.body.classList.add('dark');
+let device,ctx,presFormat;
+try{
+  if(!navigator.gpu)throw 0;
+  const adapter=await navigator.gpu.requestAdapter();
+  if(!adapter)throw 0;
+  device=await adapter.requestDevice();
+}catch(e){fail();throw new Error('WebGPU indisponible')}
+device.addEventListener?.('uncapturederror',e=>console.error('WebGPU:',e.error?.message||e));
+ctx=cv.getContext('webgpu');
+presFormat=navigator.gpu.getPreferredCanvasFormat();
+
+/* ---- Particules : bloc au repos dans le bas du cube ---- */
+const initPos=[];
+{
+  const y0=WALL_MIN+.4, y1=WALL_MIN+FILL_H*(WALL_MAX-WALL_MIN);
+  for(let y=y0;y<y1;y+=SPACING)
+    for(let x=WALL_MIN+.5;x<WALL_MAX-.4;x+=SPACING)
+      for(let z=WALL_MIN+.5;z<WALL_MAX-.4;z+=SPACING)
+        initPos.push([x+(Math.random()-.5)*.14, y+(Math.random()-.5)*.14, z+(Math.random()-.5)*.14]);
+}
+const NP=initPos.length;
+const CELLS=G*G*G;
+
+/* ---- Buffers ---- */
+const pData=new Float32Array(NP*20);          // stride 80 o : pos(16) v(16) C(48)
+for(let i=0;i<NP;i++){
+  pData[i*20]=initPos[i][0];pData[i*20+1]=initPos[i][1];pData[i*20+2]=initPos[i][2];
+}
+const particleBuf=device.createBuffer({size:pData.byteLength,usage:GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST});
+device.queue.writeBuffer(particleBuf,0,pData);
+const cellBuf=device.createBuffer({size:CELLS*16,usage:GPUBufferUsage.STORAGE});
+const densityBuf=device.createBuffer({size:NP*4,usage:GPUBufferUsage.STORAGE});
+const U=(sz)=>device.createBuffer({size:sz,usage:GPUBufferUsage.UNIFORM|GPUBufferUsage.COPY_DST});
+const ruBuf=U(400), simuBuf=U(32), dtBuf=U(4), npBuf=U(4), initBoxBuf=U(16), realBoxBuf=U(16);
+const palBuf=U(96), glassBuf=U(64);
+const dirXBuf=U(16), dirYBuf=U(16);
+device.queue.writeBuffer(dtBuf,0,new Float32Array([DT]));
+device.queue.writeBuffer(npBuf,0,new Uint32Array([NP]));
+device.queue.writeBuffer(initBoxBuf,0,new Float32Array([G,G,G]));
+device.queue.writeBuffer(realBoxBuf,0,new Float32Array([G,G,G]));
+device.queue.writeBuffer(dirXBuf,0,new Float32Array([1,0]));
+device.queue.writeBuffer(dirYBuf,0,new Float32Array([0,1]));
+
+/* ---- Géométrie cube (verre) : 24 sommets, normales par face ---- */
+{
+  const P=.5,V=[],I=[];
+  const faces=[[[P,-P,-P],[P,P,-P],[P,P,P],[P,-P,P],[1,0,0]],
+    [[-P,-P,P],[-P,P,P],[-P,P,-P],[-P,-P,-P],[-1,0,0]],
+    [[-P,P,-P],[-P,P,P],[P,P,P],[P,P,-P],[0,1,0]],
+    [[-P,-P,P],[-P,-P,-P],[P,-P,-P],[P,-P,P],[0,-1,0]],
+    [[-P,-P,P],[P,-P,P],[P,P,P],[-P,P,P],[0,0,1]],
+    [[P,-P,-P],[-P,-P,-P],[-P,P,-P],[P,P,-P],[0,0,-1]]];
+  faces.forEach((f,fi)=>{
+    for(let k=0;k<4;k++)V.push(...f[k],...f[4]);
+    const b=fi*4;I.push(b,b+1,b+2,b,b+2,b+3);
+  });
+  var glassVB=device.createBuffer({size:V.length*4,usage:GPUBufferUsage.VERTEX|GPUBufferUsage.COPY_DST});
+  device.queue.writeBuffer(glassVB,0,new Float32Array(V));
+  var glassIB=device.createBuffer({size:I.length*4,usage:GPUBufferUsage.INDEX|GPUBufferUsage.COPY_DST});
+  device.queue.writeBuffer(glassIB,0,new Uint32Array(I));
+  var glassIdxN=I.length;
+}
+/* halos internes : 2 instances, 32 o/instance */
+const GLOW_N=2;
+const glowData=new Float32Array(GLOW_N*8);
+const glowVB=device.createBuffer({size:glowData.byteLength,usage:GPUBufferUsage.VERTEX|GPUBufferUsage.COPY_DST});
+/* arêtes : 24 instances (12 halo + 12 cœur), 48 o/instance */
+const EDGE_N=24;
+const edgeData=new Float32Array(EDGE_N*12);
+const edgeVB=device.createBuffer({size:edgeData.byteLength,usage:GPUBufferUsage.VERTEX|GPUBufferUsage.COPY_DST});
+const EDGE_PAIRS=[];
+{
+  const h=.5,c=[[-h,-h,-h],[h,-h,-h],[h,h,-h],[-h,h,-h],[-h,-h,h],[h,-h,h],[h,h,h],[-h,h,h]];
+  [[0,1],[1,2],[2,3],[3,0],[4,5],[5,6],[6,7],[7,4],[0,4],[1,5],[2,6],[3,7]]
+    .forEach(([a,b])=>EDGE_PAIRS.push([c[a],c[b]]));
+}
+
+/* ---- Textures écran (recréées au resize) ---- */
+const sampler=device.createSampler({magFilter:'linear',minFilter:'linear'});
+let CW=0,CH=0,TW=0,THH=0;
+let depthA,depthB,zbuf,thickA,thickB,bgTex,backdropTex;
+let pipes={},bgs={};
+
+function makePipelines(){
+  const auto='auto';
+  const mod=s=>device.createShaderModule({code:s});
+  const simMod={clear:mod(CLEAR_WGSL),p2g1:mod(P2G1_WGSL),p2g2:mod(P2G2_WGSL),
+    upd:mod(UPDATE_WGSL),g2p:mod(G2P_WGSL)};
+  const FP={fixedPointMultiplier:FIXED_POINT};
+  pipes.clear=device.createComputePipeline({layout:auto,compute:{module:simMod.clear,entryPoint:'clearGrid'}});
+  pipes.p2g1=device.createComputePipeline({layout:auto,compute:{module:simMod.p2g1,entryPoint:'p2g_1',constants:FP}});
+  pipes.p2g2=device.createComputePipeline({layout:auto,compute:{module:simMod.p2g2,entryPoint:'p2g_2',
+    constants:{...FP,stiffness:50,restDensity:3,dynamicViscosity:.1}}});
+  pipes.upd=device.createComputePipeline({layout:auto,compute:{module:simMod.upd,entryPoint:'updateGrid',constants:FP}});
+  pipes.g2p=device.createComputePipeline({layout:auto,compute:{module:simMod.g2p,entryPoint:'g2p',constants:FP}});
+
+  const depthMod=mod(DEPTH_WGSL);
+  pipes.depth=device.createRenderPipeline({layout:auto,
+    vertex:{module:depthMod,entryPoint:'vs'},
+    fragment:{module:depthMod,entryPoint:'fs',targets:[{format:'r32float'}]},
+    primitive:{topology:'triangle-list'},
+    depthStencil:{format:'depth32float',depthWriteEnabled:true,depthCompare:'less'}});
+
+  const thickMod=mod(THICK_WGSL);
+  pipes.thick=device.createRenderPipeline({layout:auto,
+    vertex:{module:thickMod,entryPoint:'vs'},
+    fragment:{module:thickMod,entryPoint:'fs',targets:[{format:'r16float',
+      blend:{color:{srcFactor:'one',dstFactor:'one'},alpha:{srcFactor:'one',dstFactor:'one'}}}]},
+    primitive:{topology:'triangle-list'}});
+
+  const K=(10*DIAM_W*.05*(CH/2))/Math.tan(FOV/2);
+  const nrfMod=mod(NRF_WGSL);
+  const nrfC={projectedParticleConstant:K,maxFilterSize:24,
+    depthThreshold:DIAM_W*5,muK:DIAM_W*1.5,tw:CW,th:CH};
+  pipes.nrf1=device.createRenderPipeline({layout:auto,
+    vertex:{module:nrfMod,entryPoint:'vs',constants:{tw:CW,th:CH}},
+    fragment:{module:nrfMod,entryPoint:'fs',targets:[{format:'r32float'}],constants:{...nrfC,blur2D:0}},
+    primitive:{topology:'triangle-list'}});
+  pipes.nrf2=device.createRenderPipeline({layout:auto,
+    vertex:{module:nrfMod,entryPoint:'vs',constants:{tw:CW,th:CH}},
+    fragment:{module:nrfMod,entryPoint:'fs',targets:[{format:'r32float'}],constants:{...nrfC,blur2D:1}},
+    primitive:{topology:'triangle-list'}});
+
+  const gaussMod=mod(GAUSS_WGSL);
+  pipes.gauss=device.createRenderPipeline({layout:auto,
+    vertex:{module:gaussMod,entryPoint:'vs',constants:{tw:TW,th:THH}},
+    fragment:{module:gaussMod,entryPoint:'fs',targets:[{format:'r16float'}],
+      constants:{tw:TW,th:THH,filterSize:9}},
+    primitive:{topology:'triangle-list'}});
+
+  const fluidMod=mod(FLUID_WGSL);
+  pipes.fluid=device.createRenderPipeline({layout:auto,
+    vertex:{module:fluidMod,entryPoint:'vs',constants:{tw:CW,th:CH}},
+    fragment:{module:fluidMod,entryPoint:'fs',targets:[{format:presFormat}],constants:{tw:CW,th:CH}},
+    primitive:{topology:'triangle-list'}});
+
+  const bdMod=mod(BACKDROP_WGSL);
+  pipes.backdrop=device.createRenderPipeline({layout:auto,
+    vertex:{module:bdMod,entryPoint:'vs',constants:{tw:CW,th:CH}},
+    fragment:{module:bdMod,entryPoint:'fs',targets:[{format:'rgba16float'}],constants:{tw:CW,th:CH}},
+    primitive:{topology:'triangle-list'}});
+
+  const glassMod=mod(GLASS_WGSL);
+  const glassDesc=(cull,fmt)=>({layout:auto,
+    vertex:{module:glassMod,entryPoint:'vs',buffers:[{arrayStride:24,attributes:[
+      {shaderLocation:0,offset:0,format:'float32x3'},{shaderLocation:1,offset:12,format:'float32x3'}]}]},
+    fragment:{module:glassMod,entryPoint:'fs',targets:[{format:fmt,
+      blend:{color:{srcFactor:'src-alpha',dstFactor:'one-minus-src-alpha'},
+             alpha:{srcFactor:'one',dstFactor:'one-minus-src-alpha'}}}]},
+    primitive:{topology:'triangle-list',cullMode:cull}});
+  pipes.glassBack=device.createRenderPipeline(glassDesc('front','rgba16float'));
+  pipes.glassFront=device.createRenderPipeline(glassDesc('back',presFormat));
+
+  const glowMod=mod(GLOW_WGSL);
+  pipes.glow=device.createRenderPipeline({layout:auto,
+    vertex:{module:glowMod,entryPoint:'vs',buffers:[{arrayStride:32,stepMode:'instance',attributes:[
+      {shaderLocation:0,offset:0,format:'float32x3'},{shaderLocation:1,offset:12,format:'float32'},
+      {shaderLocation:2,offset:16,format:'float32x3'},{shaderLocation:3,offset:28,format:'float32'}]}]},
+    fragment:{module:glowMod,entryPoint:'fs',targets:[{format:'rgba16float',
+      blend:{color:{srcFactor:'one',dstFactor:'one'},alpha:{srcFactor:'one',dstFactor:'one'}}}]},
+    primitive:{topology:'triangle-list'}});
+
+  const edgeMod=mod(EDGE_WGSL);
+  const edgeDesc=fmt=>({layout:auto,
+    vertex:{module:edgeMod,entryPoint:'vs',buffers:[{arrayStride:48,stepMode:'instance',attributes:[
+      {shaderLocation:0,offset:0,format:'float32x3'},{shaderLocation:1,offset:12,format:'float32'},
+      {shaderLocation:2,offset:16,format:'float32x3'},{shaderLocation:3,offset:28,format:'float32'},
+      {shaderLocation:4,offset:32,format:'float32x3'}]}]},
+    fragment:{module:edgeMod,entryPoint:'fs',targets:[{format:fmt,
+      blend:{color:{srcFactor:'one',dstFactor:'one'},alpha:{srcFactor:'one',dstFactor:'one'}}}]},
+    primitive:{topology:'triangle-list'}});
+  pipes.edgeBg=device.createRenderPipeline(edgeDesc('rgba16float'));
+  pipes.edgeOver=device.createRenderPipeline(edgeDesc(presFormat));
+}
+
+function makeBindgroups(){
+  const bg=(p,e)=>device.createBindGroup({layout:p.getBindGroupLayout(0),
+    entries:e.map((r,i)=>({binding:i,resource:r}))});
+  const ub=b=>({buffer:b});
+  bgs.clear=bg(pipes.clear,[ub(cellBuf)]);
+  bgs.p2g1=bg(pipes.p2g1,[ub(particleBuf),ub(cellBuf),ub(initBoxBuf),ub(npBuf)]);
+  bgs.p2g2=bg(pipes.p2g2,[ub(particleBuf),ub(cellBuf),ub(initBoxBuf),ub(npBuf),ub(densityBuf),ub(dtBuf)]);
+  bgs.upd=bg(pipes.upd,[ub(cellBuf),ub(realBoxBuf),ub(initBoxBuf),ub(simuBuf),ub(dtBuf)]);
+  bgs.g2p=bg(pipes.g2p,[ub(particleBuf),ub(cellBuf),ub(realBoxBuf),ub(initBoxBuf),ub(npBuf),ub(dtBuf)]);
+  bgs.depth=bg(pipes.depth,[ub(particleBuf),ub(ruBuf)]);
+  bgs.thick=bg(pipes.thick,[ub(particleBuf),ub(ruBuf)]);
+  bgs.nrfX=bg(pipes.nrf1,[depthA.createView(),ub(dirXBuf)]);
+  bgs.nrfY=bg(pipes.nrf1,[depthB.createView(),ub(dirYBuf)]);
+  bgs.nrf2=bg(pipes.nrf2,[depthA.createView(),ub(dirXBuf)]);
+  bgs.gaussX=bg(pipes.gauss,[sampler,thickA.createView(),ub(dirXBuf)]);
+  bgs.gaussY=bg(pipes.gauss,[sampler,thickB.createView(),ub(dirYBuf)]);
+  bgs.fluid=bg(pipes.fluid,[sampler,depthB.createView(),ub(ruBuf),thickA.createView(),
+    envTex.createView({dimension:'cube'}),bgTex.createView(),ub(palBuf)]);
+  bgs.backdrop=bg(pipes.backdrop,[sampler,backdropTex.createView()]);
+  bgs.glassBack=bg(pipes.glassBack,[ub(ruBuf),ub(glassBuf)]);
+  bgs.glassFront=bg(pipes.glassFront,[ub(ruBuf),ub(glassBuf)]);
+  bgs.edgeBg=bg(pipes.edgeBg,[ub(ruBuf)]);
+  bgs.edgeOver=bg(pipes.edgeOver,[ub(ruBuf)]);
+  bgs.glow=bg(pipes.glow,[ub(ruBuf)]);
+}
+
+/* ---- Environnement procédural (cubemap) + backdrop, selon thème ---- */
+let envTex;
+function skyColor(d,dark){
+  const y=d[1];
+  let r,g,b;
+  if(dark){
+    /* nuit index : #2B4C8C haut → #0B1F4E → #04091E bas */
+    const t=Math.max(0,Math.min(1,(y+1)/2));
+    r=.016+t*t*.18; g=.035+t*t*.30; b=.118+t*.50;
+  }else{
+    /* haut très lumineux, bas ardoise : donne du relief aux reflets */
+    const t=Math.max(0,Math.min(1,(y+1)/2));
+    r=.40+t*.58; g=.48+t*.50; b=.62+t*.38;
+  }
+  /* « softbox » studio : fenêtres lumineuses nettes → reflets structurés sur l'eau */
+  const az=Math.atan2(d[2],d[0]);
+  const box=(a0,e0,wa,we,pw)=>{
+    let da=Math.abs(az-a0);da=Math.min(da,6.2832-da);
+    const de=Math.abs(y-e0);
+    return Math.pow(Math.max(0,1-da/wa),pw)*Math.pow(Math.max(0,1-de/we),pw)};
+  const win=box(.7,.55,.55,.30,1.6)*1.5 + box(-2.2,.42,.40,.24,1.6)*1.1 +
+            box(2.6,.18,.30,.36,2)*.8   + box(-.9,.75,.8,.22,1.4)*.9;
+  const sun=Math.pow(Math.max(0,d[0]*SUN_W[0]+y*SUN_W[1]+d[2]*SUN_W[2]),90)*(dark?2.0:1.9);
+  r+=win*(dark?.42:.55)+sun; g+=win*(dark?.55:.58)+sun; b+=win*(dark?.85:.60)+sun;
+  /* bande d'horizon nette : contraste des reflets rasants */
+  const hor=Math.exp(-Math.abs(y+.06)*14)*(dark?.12:.22);
+  r+=hor*(dark?.25:.5);g+=hor*(dark?.5:.8);b+=hor*1.1;
+  return[Math.min(1,r),Math.min(1,g),Math.min(1,b)];
+}
+function bakeEnv(){
+  const S=128;
+  envTex?.destroy();
+  envTex=device.createTexture({size:[S,S,6],format:'rgba8unorm',
+    usage:GPUTextureUsage.TEXTURE_BINDING|GPUTextureUsage.COPY_DST});
+  const dark=THEME==='dark';
+  const px=new Uint8Array(S*S*4);
+  for(let f=0;f<6;f++){
+    for(let j=0;j<S;j++)for(let i=0;i<S;i++){
+      const s=(i+.5)/S*2-1,t=(j+.5)/S*2-1;
+      let d;
+      switch(f){case 0:d=[1,-t,-s];break;case 1:d=[-1,-t,s];break;
+        case 2:d=[s,1,t];break;case 3:d=[s,-1,-t];break;
+        case 4:d=[s,-t,1];break;default:d=[-s,-t,-1]}
+      d=norm3(d);
+      const c=skyColor(d,dark),o=(j*S+i)*4;
+      px[o]=c[0]*255;px[o+1]=c[1]*255;px[o+2]=c[2]*255;px[o+3]=255;
+    }
+    device.queue.writeTexture({texture:envTex,origin:[0,0,f]},px,{bytesPerRow:S*4,rowsPerImage:S},[S,S,1]);
+  }
+}
+function bakeBackdrop(){
+  const c2=document.createElement('canvas');c2.width=CW;c2.height=CH;
+  const x=c2.getContext('2d');
+  const dark=THEME==='dark';
+  if(dark){
+    const g=x.createRadialGradient(CW/2,CH*.42,CH*.05,CW/2,CH*.44,CH*.85);
+    g.addColorStop(0,'#0B1E40');g.addColorStop(.55,'#050F26');g.addColorStop(1,'#010810');
+    x.fillStyle=g;x.fillRect(0,0,CW,CH);
+    /* halo volumétrique derrière le cube */
+    const h=x.createRadialGradient(CW/2,CH*.46,4,CW/2,CH*.46,CH*.42);
+    h.addColorStop(0,'rgba(64,118,224,.30)');h.addColorStop(.55,'rgba(38,80,180,.10)');h.addColorStop(1,'rgba(0,0,0,0)');
+    x.fillStyle=h;x.fillRect(0,0,CW,CH);
+    /* poussière lumineuse */
+    for(let i=0;i<130;i++){
+      const a=Math.random()*.5+.12;
+      x.fillStyle=`rgba(120,170,255,${a*.35})`;
+      x.beginPath();x.arc(Math.random()*CW,Math.random()*CH,Math.random()*1.8+.4,0,7);x.fill();
+    }
+    /* lueur de sol */
+    const f=x.createRadialGradient(CW/2,CH*.88,CH*.02,CW/2,CH*.9,CH*.34);
+    f.addColorStop(0,'rgba(50,110,230,.16)');f.addColorStop(1,'rgba(0,0,0,0)');
+    x.fillStyle=f;x.fillRect(0,0,CW,CH);
+  }else{
+    /* fond index : dégradé 175° + voile radial + micro-grille + vignette */
+    const g=x.createLinearGradient(0,0,CW*.087,CH);
+    g.addColorStop(0,'#F2F6FC');g.addColorStop(.35,'#E6EEF8');g.addColorStop(.65,'#D8E4F2');g.addColorStop(1,'#CDD9ED');
+    x.fillStyle=g;x.fillRect(0,0,CW,CH);
+    const v=x.createRadialGradient(CW/2,CH*.40,CH*.05,CW/2,CH*.40,CH*.75);
+    v.addColorStop(0,'rgba(255,255,255,.92)');v.addColorStop(.42,'rgba(220,234,252,.55)');v.addColorStop(1,'rgba(255,255,255,0)');
+    x.fillStyle=v;x.fillRect(0,0,CW,CH);
+    const dpr=CW/innerWidth;
+    x.fillStyle='rgba(60,100,180,.055)';
+    const st=26*dpr;
+    for(let yy=st/2;yy<CH;yy+=st)for(let xx=st/2;xx<CW;xx+=st){
+      x.beginPath();x.arc(xx,yy,dpr,0,7);x.fill();
+    }
+    const vg=x.createRadialGradient(CW/2,CH*.44,CH*.5,CW/2,CH*.44,CH*.95);
+    vg.addColorStop(0,'rgba(120,150,205,0)');vg.addColorStop(1,'rgba(120,150,205,.17)');
+    x.fillStyle=vg;x.fillRect(0,0,CW,CH);
+    /* halo de contact bleuté sous le cube */
+    x.save();x.translate(CW/2,CH*.72);x.scale(1,.28);
+    const s=x.createRadialGradient(0,0,2,0,0,CH*.30);
+    s.addColorStop(0,'rgba(60,100,190,.22)');s.addColorStop(.6,'rgba(80,120,200,.08)');s.addColorStop(1,'rgba(0,0,0,0)');
+    x.fillStyle=s;x.fillRect(-CW/2,-CH/2,CW,CH);x.restore();
+  }
+  backdropTex?.destroy?.();
+  backdropTex=device.createTexture({size:[CW,CH],format:'rgba8unorm',
+    usage:GPUTextureUsage.TEXTURE_BINDING|GPUTextureUsage.COPY_DST|GPUTextureUsage.RENDER_ATTACHMENT});
+  device.queue.copyExternalImageToTexture({source:c2},{texture:backdropTex},[CW,CH]);
+}
+
+/* ---- Palette / verre / arêtes selon thème ---- */
+function applyPalette(){
+  const dark=THEME==='dark'?1:0;
+  const p=PALS[PAL_I];
+  const pal=new Float32Array(24);
+  pal.set(p.abs[dark],0);pal[3]=1.0;                       // absorb, absScale
+  pal.set(p.glow[dark],4);pal[7]=p.gk[dark];               // glow, glowK
+  const rt=dark?[1.10,1.20,1.45]:[1.0,1.03,1.10];
+  pal.set(rt,8);pal[11]=dark?1.2:1.15;                     // reflTint, fresnelBoost
+  pal.set(SUN_W,12);pal[15]=.55;                           // sunDir, refrStrength
+  const sc=dark?[2.2,2.3,2.5]:[2.0,2.05,2.1];
+  pal.set(sc,16);pal[19]=210;                              // sunColor, specPow
+  pal[20]=.05;pal[21]=1/1.333;pal[22]=1.1;pal[23]=0;       // edgeSoft, iorInv, thickBoost
+  device.queue.writeBuffer(palBuf,0,pal);
+  /* verre */
+  const gl=new Float32Array(16);
+  if(dark){gl.set([.22,.42,.78],0);gl[3]=.018;gl.set([.42,.68,1.0],4);gl[7]=.13;gl.set([.8,.9,1.],8);gl[11]=.5}
+  else{gl.set([.68,.78,.92],0);gl[3]=.022;gl.set([.30,.46,.74],4);gl[7]=.12;gl.set([1,1,1],8);gl[11]=.55}
+  device.queue.writeBuffer(glassBuf,0,gl);
+  updateEdgeInstances();
+}
+let edgeWorld=[];
+function updateEdgeInstances(){
+  const dark=THEME==='dark'?1:0;
+  const p=PALS[PAL_I],col=p.edge[dark];
+  let o=0;
+  const put=(A,B,w,a,c)=>{edgeData[o]=A[0];edgeData[o+1]=A[1];edgeData[o+2]=A[2];edgeData[o+3]=w;
+    edgeData[o+4]=B[0];edgeData[o+5]=B[1];edgeData[o+6]=B[2];edgeData[o+7]=a;
+    edgeData[o+8]=c[0];edgeData[o+9]=c[1];edgeData[o+10]=c[2];edgeData[o+11]=0;o+=12};
+  for(const[a,b]of edgeWorld)put(a,b,dark?.052:.030,dark?.36:.30,col);              // halo
+  const core=dark?[col[0]*.6+.4,col[1]*.6+.4,col[2]*.6+.4]:col;
+  for(const[a,b]of edgeWorld)put(a,b,dark?.012:.007,dark?.85:.62,core);             // cœur
+  device.queue.writeBuffer(edgeVB,0,edgeData);
+}
+
+/* ---- Resize ---- */
+let pixCap=2.3e6;                     // abaissé automatiquement si le GPU peine
+function resize(){
+  const dpr=Math.min(devicePixelRatio,2);
+  let w=Math.floor(innerWidth*dpr),h=Math.floor(innerHeight*dpr);
+  const px=w*h;
+  if(px>pixCap){const s=Math.sqrt(pixCap/px);w=Math.floor(w*s);h=Math.floor(h*s)}
+  if(w===CW&&h===CH)return;
+  CW=w;CH=h;TW=w>>1;THH=h>>1;
+  cv.width=CW;cv.height=CH;
+  ctx.configure({device,format:presFormat,alphaMode:'opaque'});
+  const T=(f,W,H)=>device.createTexture({size:[W,H],format:f,
+    usage:GPUTextureUsage.RENDER_ATTACHMENT|GPUTextureUsage.TEXTURE_BINDING});
+  depthA?.destroy();depthB?.destroy();zbuf?.destroy();thickA?.destroy();thickB?.destroy();bgTex?.destroy();
+  depthA=T('r32float',CW,CH);depthB=T('r32float',CW,CH);
+  zbuf=device.createTexture({size:[CW,CH],format:'depth32float',usage:GPUTextureUsage.RENDER_ATTACHMENT});
+  thickA=T('r16float',TW,THH);thickB=T('r16float',TW,THH);
+  bgTex=T('rgba16float',CW,CH);
+  makePipelines();
+  bakeBackdrop();
+  makeBindgroups();
+}
+
+/* ═════════════════════════ Contrôles ═════════════════════════ */
+const rot={x:.30,y:-.52};let rVX=0,rVY=0,drag=false,lX=0,lY=0;
+let autoRot=true,distT=8.0,dist=8.0;
+let gyro=null;         // vecteur gravité monde piloté par capteur, ou null
+cv.addEventListener('pointerdown',e=>{drag=true;autoRot=false;bA.textContent='🌀 Auto';
+  lX=e.clientX;lY=e.clientY;rVX=0;rVY=0;cv.setPointerCapture(e.pointerId)});
+cv.addEventListener('pointerup',()=>drag=false);
+cv.addEventListener('pointercancel',()=>drag=false);
+cv.addEventListener('pointermove',e=>{if(!drag)return;
+  const dx=(e.clientX-lX)*.0072,dy=(e.clientY-lY)*.0062;
+  rot.y+=dx;rot.x+=dy;rVX=dy;rVY=dx;lX=e.clientX;lY=e.clientY;e.preventDefault()},{passive:false});
+addEventListener('wheel',e=>{distT=Math.max(4.2,Math.min(13,distT+e.deltaY*.011))},{passive:true});
+let pinch0=0;
+cv.addEventListener('touchstart',e=>{if(e.touches.length===2)
+  pinch0=Math.hypot(e.touches[0].clientX-e.touches[1].clientX,e.touches[0].clientY-e.touches[1].clientY)},{passive:true});
+cv.addEventListener('touchmove',e=>{if(e.touches.length===2){
+  const d=Math.hypot(e.touches[0].clientX-e.touches[1].clientX,e.touches[0].clientY-e.touches[1].clientY);
+  distT=Math.max(4.2,Math.min(13,distT-(d-pinch0)*.02));pinch0=d;e.preventDefault()}},{passive:false});
+let impulseReq=0;
+if(url.has('kick'))setInterval(()=>impulseReq=1,2500);   // mode démo/test
+const bA=document.getElementById('bA');
+document.getElementById('bS').addEventListener('click',()=>impulseReq=1);
+bA.addEventListener('click',()=>{autoRot=!autoRot;bA.textContent=autoRot?'⏹ Stop':'🌀 Auto'});
+document.getElementById('bC').addEventListener('click',()=>{PAL_I=(PAL_I+1)%PALS.length;applyPalette()});
+document.getElementById('bT').addEventListener('click',()=>{
+  THEME=THEME==='dark'?'light':'dark';
+  document.body.classList.toggle('dark',THEME==='dark');
+  bakeEnv();bakeBackdrop();makeBindgroups();applyPalette()});
+/* gyroscope (iPad/iPhone) : la gravité suit l'inclinaison réelle */
+if(IS_TOUCH){
+  const b=document.createElement('button');b.className='b';b.id='bG';b.textContent='📱 Gyro';
+  document.getElementById('ui').appendChild(b);
+  b.addEventListener('click',async()=>{
+    if(gyro){gyro=null;b.textContent='📱 Gyro';return}
+    try{
+      if(typeof DeviceMotionEvent!=='undefined'&&DeviceMotionEvent.requestPermission)
+        if(await DeviceMotionEvent.requestPermission()!=='granted')return;
+      gyro=[0,-1,0];b.textContent='📴 Gyro';
+      addEventListener('devicemotion',e=>{
+        if(!gyro)return;
+        const g=e.accelerationIncludingGravity;if(!g||g.x==null)return;
+        const a=((screen.orientation?.angle)||0)*Math.PI/180;
+        const gx=g.x*Math.cos(a)+g.y*Math.sin(a), gy=-g.x*Math.sin(a)+g.y*Math.cos(a);
+        gyro=norm3([gx/9.81,gy/9.81,-(g.z/9.81)*.35]);
+      });
+    }catch(err){console.warn(err)}
+  });
+}
+
+/* ═════════════════════════ Boucle ═════════════════════════ */
+bakeEnv();
+resize();          // crée textures, pipelines, backdrop et bind groups
+/* recalcule les arêtes en coordonnées monde (rotation cube) */
+function computeEdges(R){
+  edgeWorld=EDGE_PAIRS.map(([a,b])=>[
+    m4xformDir(R,[a[0]*CUBE_W,a[1]*CUBE_W,a[2]*CUBE_W]),
+    m4xformDir(R,[b[0]*CUBE_W,b[1]*CUBE_W,b[2]*CUBE_W])]);
+}
+computeEdges(m4rotXY(rot.x,rot.y));
+applyPalette();
+
+const ruData=new Float32Array(100);
+const simuData=new Float32Array(8);
+const iEl=document.getElementById('i');
+let last=performance.now(),fps=60,fc=0;
+console.log(`MLS-MPM WebGPU · grille ${G}³ (${CELLS} cellules) · ${NP} particules · inspiré de Splash (matsuoka-601, MIT)`);
+
+function frame(now){
+  requestAnimationFrame(frame);
+  const dtMs=Math.min(now-last,50);last=now;
+  fps=fps*.92+.08*(1000/Math.max(dtMs,1));
+  fc++;if(fc%30===0)iEl.innerHTML=`MLS-MPM · ${NP.toLocaleString('fr')} ptcl · ${G}³ · ${Math.round(fps)} fps`;
+  /* résolution dynamique : si ça rame durablement, on abaisse le plafond de pixels */
+  if(fc>240&&fc%240===0&&fps<42&&pixCap>0.9e6){pixCap*=.72;CW=0}
+  resize();
+
+  /* rotation cube */
+  if(!drag&&!autoRot){rot.y+=rVY;rot.x+=rVX;rVX*=.88;rVY*=.88}
+  if(autoRot){rot.y+=.0034*dtMs*.06;rot.x=.30+Math.sin(now*.00030)*.22}
+  rot.x=Math.max(-1.35,Math.min(1.35,rot.x));
+  dist+=(distT-dist)*.1;
+
+  /* matrices */
+  const R=m4rotXY(rot.x,rot.y);
+  const model=new Float32Array(16);          // grille → monde : R·S·T(-centre)
+  {
+    const s=SCALE;
+    for(let c=0;c<3;c++)for(let r=0;r<3;r++)model[c*4+r]=R[c*4+r]*s;
+    const t=m4xformDir(R,[-BOX_C*s,-BOX_C*s,-BOX_C*s]);
+    model[12]=t[0];model[13]=t[1];model[14]=t[2];model[15]=1;
+  }
+  const cubeM=new Float32Array(16);          // cube local ±.5 → monde
+  for(let c=0;c<3;c++)for(let r=0;r<3;r++)cubeM[c*4+r]=R[c*4+r]*CUBE_W;
+  cubeM[15]=1;
+  const eye=[0,1.15,dist];
+  const view=m4lookAt(eye,[0,-.12,0],[0,1,0]);
+  const proj=m4persp(FOV,CW/CH,.1,60);
+  const viewModel=m4mul(view,model);
+  ruData[0]=1/CW;ruData[1]=1/CH;ruData[2]=DIAM_W;ruData[3]=0;
+  ruData.set(proj,4);ruData.set(m4invPersp(proj),20);ruData.set(viewModel,36);
+  ruData.set(m4invRigid(view),52);ruData.set(view,68);ruData.set(cubeM,84);
+  device.queue.writeBuffer(ruBuf,0,ruData);
+
+  /* gravité en repère grille : gBox = Rᵀ·gMonde */
+  const gW=gyro||[0,-1,0];
+  const Rt=[R[0],R[4],R[8],0, R[1],R[5],R[9],0, R[2],R[6],R[10],0, 0,0,0,1];
+  const gB=m4xformDir(Rt,gW);
+  simuData[0]=gB[0]*GRAV;simuData[1]=gB[1]*GRAV;simuData[2]=gB[2]*GRAV;
+  simuData[3]=Math.random()*6.28;
+  if(impulseReq){
+    const iB=m4xformDir(Rt,[(Math.random()-.5)*3.2,3.2+Math.random()*1.4,(Math.random()-.5)*3.2]);
+    simuData[4]=iB[0];simuData[5]=iB[1];simuData[6]=iB[2];impulseReq=0;
+  }else{simuData[4]=0;simuData[5]=0;simuData[6]=0}
+  device.queue.writeBuffer(simuBuf,0,simuData);
+
+  /* arêtes + temps verre */
+  computeEdges(R);updateEdgeInstances();
+  device.queue.writeBuffer(glassBuf,48,new Float32Array([now*.001]));
+  /* cœur lumineux : halo au fond du cube + halo central (repère cube tourné) */
+  {
+    const dark=THEME==='dark'?1:0,p=PALS[PAL_I];
+    const gc=p.glow[dark],breath=.85+.15*Math.sin(now*.0011);
+    const put=(k,loc,size,c,a)=>{const w=m4xformDir(R,loc);
+      glowData[k*8]=w[0];glowData[k*8+1]=w[1];glowData[k*8+2]=w[2];glowData[k*8+3]=size;
+      glowData[k*8+4]=c[0];glowData[k*8+5]=c[1];glowData[k*8+6]=c[2];glowData[k*8+7]=a};
+    put(0,[0,-CUBE_W*.38,0],CUBE_W*.42,[gc[0]*.7+.15,gc[1]*.7+.25,gc[2]*.7+.45],
+      (dark?.70:.22)*breath);
+    put(1,[0,-CUBE_W*.10,0],CUBE_W*.24,[gc[0],gc[1],gc[2]],(dark?.40:.14)*breath);
+    device.queue.writeBuffer(glowVB,0,glowData);
+  }
+
+  const enc=device.createCommandEncoder();
+
+  /* — SIMULATION — */
+  const wgP=Math.ceil(NP/64),wgC=Math.ceil(CELLS/64);
+  for(let s=0;s<SUBSTEPS;s++){
+    const c=enc.beginComputePass();
+    c.setPipeline(pipes.clear);c.setBindGroup(0,bgs.clear);c.dispatchWorkgroups(wgC);
+    c.setPipeline(pipes.p2g1);c.setBindGroup(0,bgs.p2g1);c.dispatchWorkgroups(wgP);
+    c.setPipeline(pipes.p2g2);c.setBindGroup(0,bgs.p2g2);c.dispatchWorkgroups(wgP);
+    c.setPipeline(pipes.upd);c.setBindGroup(0,bgs.upd);c.dispatchWorkgroups(wgC);
+    c.setPipeline(pipes.g2p);c.setBindGroup(0,bgs.g2p);c.dispatchWorkgroups(wgP);
+    c.end();
+  }
+
+  /* — RENDU — */
+  const pass=(view,clear,load)=>enc.beginRenderPass({colorAttachments:[{view,
+    clearValue:clear,loadOp:load||'clear',storeOp:'store'}]});
+  /* 1. fond : backdrop + verre arrière + arêtes */
+  {
+    const p=pass(bgTex.createView(),{r:0,g:0,b:0,a:1});
+    p.setPipeline(pipes.backdrop);p.setBindGroup(0,bgs.backdrop);p.draw(3);
+    p.setPipeline(pipes.glassBack);p.setBindGroup(0,bgs.glassBack);
+    p.setVertexBuffer(0,glassVB);p.setIndexBuffer(glassIB,'uint32');p.drawIndexed(glassIdxN);
+    p.setPipeline(pipes.edgeBg);p.setBindGroup(0,bgs.edgeBg);
+    p.setVertexBuffer(0,edgeVB);p.draw(6,EDGE_N);
+    p.setPipeline(pipes.glow);p.setBindGroup(0,bgs.glow);
+    p.setVertexBuffer(0,glowVB);p.draw(6,GLOW_N);
+    p.end();
+  }
+  /* 2. depth billboards */
+  {
+    const p=enc.beginRenderPass({colorAttachments:[{view:depthA.createView(),
+      clearValue:{r:1e5,g:0,b:0,a:1},loadOp:'clear',storeOp:'store'}],
+      depthStencilAttachment:{view:zbuf.createView(),depthClearValue:1,depthLoadOp:'clear',depthStoreOp:'store'}});
+    p.setPipeline(pipes.depth);p.setBindGroup(0,bgs.depth);p.draw(6,NP);p.end();
+  }
+  /* 3. narrow-range filter : X → Y → 2D */
+  {let p=pass(depthB.createView(),{r:1e5,g:0,b:0,a:1});
+   p.setPipeline(pipes.nrf1);p.setBindGroup(0,bgs.nrfX);p.draw(3);p.end();
+   p=pass(depthA.createView(),{r:1e5,g:0,b:0,a:1});
+   p.setPipeline(pipes.nrf1);p.setBindGroup(0,bgs.nrfY);p.draw(3);p.end();
+   p=pass(depthB.createView(),{r:1e5,g:0,b:0,a:1});
+   p.setPipeline(pipes.nrf2);p.setBindGroup(0,bgs.nrf2);p.draw(3);p.end()}
+  /* 4. thickness ½-res + blur gaussien X→Y */
+  {let p=pass(thickA.createView(),{r:0,g:0,b:0,a:1});
+   p.setPipeline(pipes.thick);p.setBindGroup(0,bgs.thick);p.draw(6,NP);p.end();
+   p=pass(thickB.createView(),{r:0,g:0,b:0,a:1});
+   p.setPipeline(pipes.gauss);p.setBindGroup(0,bgs.gaussX);p.draw(3);p.end();
+   p=pass(thickA.createView(),{r:0,g:0,b:0,a:1});
+   p.setPipeline(pipes.gauss);p.setBindGroup(0,bgs.gaussY);p.draw(3);p.end()}
+  /* 5. composite fluide → canvas, puis verre avant + arêtes par-dessus */
+  {
+    const p=pass(ctx.getCurrentTexture().createView(),{r:0,g:0,b:0,a:1});
+    p.setPipeline(pipes.fluid);p.setBindGroup(0,bgs.fluid);p.draw(3);
+    p.setPipeline(pipes.glassFront);p.setBindGroup(0,bgs.glassFront);
+    p.setVertexBuffer(0,glassVB);p.setIndexBuffer(glassIB,'uint32');p.drawIndexed(glassIdxN);
+    p.setPipeline(pipes.edgeOver);p.setBindGroup(0,bgs.edgeOver);
+    p.setVertexBuffer(0,edgeVB);p.draw(6,EDGE_N/2,0,EDGE_N/2); // cœurs seulement, en surimpression
+    p.end();
+  }
+  device.queue.submit([enc.finish()]);
+}
+requestAnimationFrame(frame);
+addEventListener('resize',resize);
+</script></body></html>
