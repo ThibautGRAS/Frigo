@@ -819,6 +819,45 @@ const iceRough=(function(){
   t.wrapS=t.wrapT=THREE.RepeatWrapping;
   return t;
 })();
+/* ── Carte de normales « glaçon » : bosses fondues + fissures → distorsion réfractive ── */
+const iceNormal=(function(){
+  const S=256,cv=document.createElement("canvas");cv.width=cv.height=S;
+  const x=cv.getContext("2d");
+  x.fillStyle="#808080";x.fillRect(0,0,S,S);
+  /* bosses douces (surface fondue) */
+  for(let i=0;i<26;i++){
+    const gx=Math.random()*S,gy=Math.random()*S,r=22+Math.random()*70;
+    const g=x.createRadialGradient(gx,gy,0,gx,gy,r);
+    const v=Math.random()<.5?40:215;
+    g.addColorStop(0,`rgba(${v},${v},${v},.5)`);g.addColorStop(1,"rgba(0,0,0,0)");
+    x.fillStyle=g;x.fillRect(0,0,S,S);
+  }
+  /* fissures internes */
+  x.shadowColor="rgba(255,255,255,.9)";x.shadowBlur=3;
+  x.strokeStyle="rgba(230,230,230,.5)";
+  for(let i=0;i<7;i++){
+    x.lineWidth=1+Math.random()*1.5;
+    let px=Math.random()*S,py=Math.random()*S;
+    x.beginPath();x.moveTo(px,py);
+    for(let j=0;j<4;j++){px+=(Math.random()-.5)*90;py+=(Math.random()-.5)*90;x.lineTo(px,py);}
+    x.stroke();
+  }
+  /* hauteur → normales (Sobel, périodique) */
+  const src=x.getImageData(0,0,S,S).data;
+  const out=x.createImageData(S,S),d=out.data;
+  const H=(i,j)=>src[(((j+S)%S)*S+((i+S)%S))*4]/255;
+  for(let j=0;j<S;j++)for(let i=0;i<S;i++){
+    const dx=(H(i+1,j)-H(i-1,j))*2.2,dy=(H(i,j+1)-H(i,j-1))*2.2;
+    const inv=1/Math.sqrt(dx*dx+dy*dy+1);
+    const o=(j*S+i)*4;
+    d[o]=(-dx*inv*.5+.5)*255;d[o+1]=(-dy*inv*.5+.5)*255;d[o+2]=inv*255;d[o+3]=255;
+  }
+  x.putImageData(out,0,0);
+  const t=new THREE.CanvasTexture(cv);
+  t.colorSpace=THREE.NoColorSpace;
+  t.wrapS=t.wrapT=THREE.RepeatWrapping;
+  return t;
+})();
 /* Lueur interne : halo blanc-bleuté doux */
 const glowTex=(function(){
   const cv=document.createElement("canvas");cv.width=cv.height=192;
@@ -865,6 +904,7 @@ let frame;
   frame=new THREE.LineSegments(fg,new THREE.LineBasicMaterial({
     color:0x8FB4F0,transparent:true,opacity:0,
     blending:THREE.AdditiveBlending,depthWrite:false}));
+  frame.visible=false;     /* pas de cadre autour de la forme générale */
   root.add(frame);
 }
 const OUT=2.6;
@@ -892,9 +932,14 @@ DOMAINS.forEach((d,di)=>{
     const present=!!cell;
     const ess=present&&cell.essential;
     const mat=present?new THREE.MeshPhysicalMaterial({
-      color:0x3E7BD8,metalness:0,roughness:.26,roughnessMap:iceRough,
+      /* verre cristal (cf. « Glass Designer ») : transmission forte, surface polie,
+         clearcoat plein, réfraction ior 1.5 ; teinte bleue conservée via color+atténuation */
+      color:0x3E7BD8,metalness:0,roughness:.05,
+      normalMap:iceNormal,normalScale:new THREE.Vector2(.3,.3),
       transparent:true,opacity:.94,depthWrite:true,
-      clearcoat:.35,clearcoatRoughness:.25,envMapIntensity:.4,
+      transmission:.9,ior:1.5,thickness:.55,
+      attenuationColor:0x9EC4F5,attenuationDistance:2.2,
+      clearcoat:1.0,clearcoatRoughness:.04,envMapIntensity:1.0,
       emissive:0x1E4296,emissiveIntensity:.38
     }):new THREE.MeshPhysicalMaterial({
       color:0x7090B8,metalness:0,roughness:.4,
@@ -905,12 +950,12 @@ DOMAINS.forEach((d,di)=>{
     m.position.copy(cellLocal(ai,li));
     m.castShadow=false;
     m.userData={key,cell,di,ai,li,present,boost:0,
-      tgt:{opacity:present?.92:.035,emissiveI:present?.28:.06,scale:1,edge:present?.5:.06,red:0}};
+      tgt:{opacity:present?.92:.035,emissiveI:present?.28:.06,scale:1,edge:present?.8:.06,red:0}};
     const edges=new THREE.LineSegments(edgeGeo,new THREE.LineBasicMaterial({
       color:present?(ess?0xA8C0F2:0x7FA6E8):0x6E88B4,transparent:true,
       opacity:present?.62:.14,
       blending:THREE.AdditiveBlending,depthWrite:false}));
-    edges.visible=false;   /* version bloom : pas de cadre autour des cubes */
+    edges.visible=false;   /* pas de cage filaire : l'arête vient du biseau du verre */
     m.add(edges);m.userData.edges=edges;
     if(present){
       const info=new THREE.Sprite(new THREE.SpriteMaterial({map:makeInfoTexture(cell),
@@ -931,27 +976,7 @@ DOMAINS.forEach((d,di)=>{
       const gs=.34+Math.random()*.16;glow2.scale.set(gs,gs,1);
       glow2.position.set((Math.random()-.5)*.42,(Math.random()-.5)*.42,(Math.random()-.5)*.25);
       m.add(glow2);m.userData.glow2=glow2;
-      /* ── Liquide physique : équation des ondes 2D (actif seulement si domaine ouvert) ── */
-      const flv=0.12+Math.random()*0.60;
-      const fy=(flv-0.5)*BOX*0.84;
-      const LSEG=10;                                    /* 11×11 = 121 vertices */
-      const fpGeo=new THREE.PlaneGeometry(BOX*.77,BOX*.77,LSEG,LSEG);
-      const lN=(LSEG+1)*(LSEG+1);
-      const fpMat=new THREE.MeshPhysicalMaterial({
-        color:ess?0xFF3344:0x2A8AFF,
-        transparent:true,opacity:0,depthWrite:false,
-        clearcoat:1.0,clearcoatRoughness:.03,
-        metalness:.18,roughness:.04,side:THREE.DoubleSide
-      });
-      const fp=new THREE.Mesh(fpGeo,fpMat);
-      fp.rotation.x=-Math.PI/2;fp.position.y=fy;fp.renderOrder=2;
-      m.add(fp);
-      m.userData.liquid={
-        mesh:fp,geo:fpGeo,baseY:fy,level:flv,seg:LSEG,
-        h:new Float32Array(lN),   /* hauteurs de vague */
-        v:new Float32Array(lN),   /* vitesses */
-        active:false              /* ne simule que si domaine ouvert */
-      };
+      /* (niveaux liquides retirés — le verre est plein, cf. liquid_splash.html pour l'eau) */
       m.userData.phase=Math.random()*Math.PI*2;
       m.userData.phase2=Math.random()*Math.PI*2;
     }
@@ -1070,7 +1095,7 @@ function setTargets(){
     const{cell,di,ai,li,present}=m.userData;const t=m.userData.tgt;
     const ess=present&&cell.essential;
     /* état de repos */
-    let op=present?.92:.035, em=present?.28:.06, sc=1, ed=present?.5:.06, red=0, info=0, glow=present?.22:0;
+    let op=present?.92:.035, em=present?.28:.06, sc=1, ed=present?.8:.06, red=0, info=0, glow=present?.22:0;
     const metaOn=metaKey&&((metaKey.type==="axe"&&ai===metaKey.index)||(metaKey.type==="levier"&&li===metaKey.index)||(metaKey.type==="domaine"&&di===metaKey.index));
     if(metaKey&&metaKey.dom==null){                    /* fiche axe/levier/domaine — cube fermé */
       if(metaOn&&present){op=.82;em=.45;ed=1;sc=1.05;red=ess?.95:0;glow=ess?.45:.3;}
@@ -1167,20 +1192,6 @@ function openSlice(di,cb){
   if(metaKey){metaKey=null;card.classList.remove("show");}
   if(openDom>=0)closeSliceNow();
   openDom=di;
-  /* activer simulation liquide + impulse initiale sur ce domaine */
-  cellMeshes.forEach(m=>{
-    if(!m.userData.liquid)return;
-    const lq=m.userData.liquid,S=lq.seg;
-    lq.active=(m.userData.di===di);
-    if(lq.active){
-      const cx=Math.floor(S/2),cy=Math.floor(S/2);
-      for(let i=0;i<=S;i++)for(let j=0;j<=S;j++){
-        const d=Math.sqrt((i-cy)**2+(j-cx)**2);
-        lq.h[i*(S+1)+j]=Math.exp(-d*d*.5)*.04;
-        lq.v[i*(S+1)+j]=0;
-      }
-    }else{lq.h.fill(0);lq.v.fill(0);}
-  });
   const g=domainGroups[di];
   /* recadrage doux + la tranche vient TOUJOURS au même endroit devant ;
      le cube restant se referme derrière (pas de trou) */
@@ -1203,7 +1214,6 @@ function openSlice(di,cb){
 }
 function closeSliceNow(){
   const di=openDom;if(di<0)return;
-  cellMeshes.forEach(m=>{if(m.userData.liquid){m.userData.liquid.active=false;m.userData.liquid.h.fill(0);m.userData.liquid.v.fill(0);}});
   closeCard();
   const g=domainGroups[di];
   tw(g.userData.anim,{z:domZ(di),ry:0},750,easeIO);
@@ -1458,7 +1468,10 @@ function pick(e){
   if(openDom<0){
     const lab=castLabel(e);
     if(lab){
-      if(lab.userData.type==="domaine")openDomInfo(lab.userData.index);
+      if(lab.userData.type==="domaine"){                 /* nom de domaine = même geste que le rail : extraire la tranche */
+        const di=lab.userData.index;
+        openDom===di?closeSliceNow():openSlice(di);
+      }
       else openMeta(lab.userData.type,lab.userData.index);
       return;
     }
@@ -1552,7 +1565,7 @@ presBtn.addEventListener("click",()=>{presOn?(stopPres(),closeCard(),closeSliceN
 /* ════════════════════ BOUCLE ════════════════════ */
 const _s=new THREE.Vector3(),_w=new THREE.Vector3();
 const RED_C=new THREE.Color(0xEF3346),RED_E=new THREE.Color(0x8F1220),
-      EDGE_N=new THREE.Color(0x7FA6E8),EDGE_S=new THREE.Color(0xA8C0F2),EDGE_R=new THREE.Color(0xFF4D5C),
+      EDGE_N=new THREE.Color(0x3D5FA8),EDGE_S=new THREE.Color(0xA8C0F2),EDGE_R=new THREE.Color(0xFF4D5C),
       GLOW_N=new THREE.Color(0x4E8CFF),GLOW_S=new THREE.Color(0xFF4757),
       BLUE_E=new THREE.Color(0x0A2050),
       STRAT_E=new THREE.Color(0x241428),GLASS=new THREE.Color(0x3E7BD8),
@@ -1560,12 +1573,20 @@ const RED_C=new THREE.Color(0xEF3346),RED_E=new THREE.Color(0x8F1220),
       GHOST_C=new THREE.Color(0x9FBADF),GHOST_E=new THREE.Color(0x27436E),
       WHITE_C=new THREE.Color(0xC8D8EA),WHITE_E=new THREE.Color(0xA0B8D0);
 let last=performance.now(),startT=-1;
+const PERF={f:60,degraded:false};
 function animate(){
   requestAnimationFrame(animate);
   const now=performance.now(),dtMs=Math.min(50,now-last);last=now;
   const tm=now*0.001,dt=Math.min(1,dtMs/1000*7.5);
   if(startT<0)startT=tm;
   const age=tm-startT;
+  /* garde-fou perfs : si le GPU ne suit pas (transmission coûteuse), on repasse en verre simple */
+  PERF.f=PERF.f*.95+.05*(1000/Math.max(dtMs,1));
+  if(!PERF.degraded&&age>6&&PERF.f<34){
+    PERF.degraded=true;
+    cellMeshes.forEach(m=>{if(!m.userData.present)return;const mt=m.material;
+      mt.transmission=0;mt.thickness=0;mt.roughness=.24;mt.needsUpdate=true;});
+  }
   stepTweens(dtMs);
 
   /* groupes de domaine */
@@ -1595,8 +1616,12 @@ function animate(){
     const ph=m.userData.phase||0;
     const life=pr?(.82+.22*Math.sin(tm*.85+ph)+.1*Math.sin(tm*2.1+ph*1.7)):1;
     mat.opacity+=((pr?(0.55+T.opacity*0.45):(T.opacity+boost*.3))-mat.opacity)*dt;
-    /* transmission : maximale au repos (glaçon translucide), réduite quand mis en avant (plus dense/lisible) */
-    /* pas de transmission : le bleu verre s'exprime directement */
+    /* transmission vivante : glaçon translucide au repos, se densifie quand rouge/sélectionné
+       (jamais 0 : éviter une recompilation du shader) */
+    if(pr&&THA.tr&&!PERF.degraded){
+      const trT=Math.max(.05,THA.tr*(1-T.red*.85));
+      mat.transmission+=(trT-mat.transmission)*dt;
+    }
     mat.emissiveIntensity+=((T.emissiveI*pulse*life+boost)-mat.emissiveIntensity)*dt;
     /* anti-rose : le vernis et les reflets s'éteignent quand la brique vire au rouge */
     if(pr){
@@ -1643,44 +1668,6 @@ function animate(){
       m.userData._gcol2=m.userData._gcol2||new THREE.Color();
       m.userData._gcol2.copy(GLOW_N).lerp(GLOW_S,T.red);
       m.userData.glow2.material.color.lerp(m.userData._gcol2,dt);
-    }
-    if(pr&&m.userData.liquid){
-      const lq=m.userData.liquid;
-      const tLiq=T.opacity>0.3?(ess?.65:.55):0;
-      lq.mesh.material.opacity+=(tLiq-lq.mesh.material.opacity)*dt;
-      m.userData._lcol=m.userData._lcol||new THREE.Color(ess?0xFF3344:0x2A8AFF);
-      m.userData._lcol.set(ess?0xFF3344:0x2A8AFF).lerp(RED_C,T.red*.5);
-      lq.mesh.material.color.lerp(m.userData._lcol,dt);
-      if(lq.active&&lq.mesh.material.opacity>0.05){
-        /* ── Simulation physique : équation des ondes 2D avec amortissement ── */
-        const S=lq.seg,h2=lq.h,v2=lq.v,N=(S+1)*(S+1);
-        const c2=140,damp=.96,amp=0.028*BOX,phys_dt=Math.min(dt,.025);
-        /* force de tilt : l'inertie de rotation crée une pente d'équilibre */
-        const tiltX=rotV.vx*.35,tiltY=rotV.vy*.28;
-        for(let i=0;i<=S;i++){
-          for(let j=0;j<=S;j++){
-            const idx=i*(S+1)+j;
-            const nx=(j/S-.5),ny=(i/S-.5);
-            /* Laplacien discret (propagation de vague) */
-            let lap=0,cnt=0;
-            if(i>0){lap+=h2[(i-1)*(S+1)+j];cnt++;}
-            if(i<S){lap+=h2[(i+1)*(S+1)+j];cnt++;}
-            if(j>0){lap+=h2[i*(S+1)+j-1];cnt++;}
-            if(j<S){lap+=h2[i*(S+1)+j+1];cnt++;}
-            lap=lap/cnt-h2[idx];
-            /* équilibre penché selon l'inertie de rotation */
-            const eq=nx*tiltX+ny*tiltY;
-            v2[idx]=(v2[idx]+c2*phys_dt*lap+(eq-h2[idx])*3.0*phys_dt)*damp;
-            h2[idx]+=v2[idx];
-          }
-        }
-        /* appliquer les hauteurs aux vertices */
-        const pos=lq.geo.attributes.position;
-        for(let k=0;k<N;k++)pos.setZ(k,h2[k]*amp);
-        pos.needsUpdate=true;
-        lq.geo.computeVertexNormals();
-        lq.mesh.position.y=lq.baseY;
-      }
     }
   });
 
@@ -1830,12 +1817,13 @@ addEventListener("resize",resize);
 const THEMES={
   verre:{
     col:{GLASS:0x3E7BD8,GLASS_S:0x4C8BEC,RED_C:0xEF3346,RED_E:0x8F1220,
-         EDGE_N:0x7FA6E8,EDGE_S:0xA8C0F2,EDGE_R:0xFF4D5C,
+         EDGE_N:0x3D5FA8,EDGE_S:0xA8C0F2,EDGE_R:0xFF4D5C,
          GLOW_N:0x4E8CFF,GLOW_S:0xFF4757,BLUE_E:0x1E4290,STRAT_E:0x1A3A80,
          GHOST_C:0xA0B8D0,GHOST_E:0x6080A0},
-    mat:{metalness:0,roughness:.28,ice:true,depthWrite:true,ccR:.18},
+    mat:{metalness:0,roughness:.05,ice:true,depthWrite:true,ccR:.04,
+         transmission:.9,thickness:.55,ior:1.5,attC:0x9EC4F5,attD:2.2,normal:.3},
     edgeBlend:"normal",
-    envBase:.45,envRed:.3,ccBase:.42,ccRed:.3,
+    envBase:1.0,envRed:.3,ccBase:.95,ccRed:.3,
     frame:0,glintB:.55,glintA:.3,grid:0,
     keyI:1.1,rimI:.45,shadows:false,
     fx:(t,present,ess)=>{}
@@ -1858,10 +1846,16 @@ function applyTheme(name){
     const mt=m.material;
     mt.metalness=th.mat.metalness;
     mt.roughness=th.mat.roughness;
-    if(mt.roughnessMap!==undefined)mt.roughnessMap=iceRough;
+    mt.roughnessMap=null;                             /* cristal poli : pas de givre */
     mt.depthWrite=false;
     mt.clearcoatRoughness=th.mat.ccR;
-    if(mt.transmission!==undefined)mt.transmission=0;
+    if(mt.transmission!==undefined){                  /* effet glaçon : réfraction réelle du fond */
+      mt.transmission=th.mat.transmission||0;
+      mt.thickness=th.mat.thickness||0;
+      mt.ior=th.mat.ior||1.5;
+      if(mt.normalScale)mt.normalScale.setScalar(th.mat.normal||0);
+      if(th.mat.attC!==undefined){mt.attenuationColor.setHex(th.mat.attC);mt.attenuationDistance=th.mat.attD;}
+    }
     mt.needsUpdate=true;
     const eb=th.edgeBlend==="add"?THREE.AdditiveBlending:THREE.NormalBlending;
     if(m.userData.edges.material.blending!==eb){
@@ -1875,7 +1869,7 @@ function applyTheme(name){
   THA.envBase=th.envBase;THA.envRed=th.envRed;
   THA.ccBase=th.ccBase;THA.ccRed=th.ccRed;
   THA.frame=th.frame;THA.glintB=th.glintB;THA.glintA=th.glintA;
-  THA.grid=th.grid;THA.fx=th.fx;
+  THA.grid=th.grid;THA.fx=th.fx;THA.tr=th.mat.transmission||0;
   setTargets();
 }
 resize();camDist=CAM.home+2;
