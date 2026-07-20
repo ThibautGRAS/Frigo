@@ -698,7 +698,7 @@ function stepTweens(dtMs){
   tex.dispose();pm.dispose();
 })();
 scene.add(new THREE.AmbientLight(0xFFFFFF,.85));
-const keyL=new THREE.DirectionalLight(0xE8F0FF,.85);
+const keyL=new THREE.DirectionalLight(0xCCDEFF,.65);
 keyL.position.set(7,16,9);keyL.castShadow=false;
 keyL.shadow.mapSize.set(1024,1024);
 keyL.shadow.camera.left=-8;keyL.shadow.camera.right=8;
@@ -891,8 +891,8 @@ DOMAINS.forEach((d,di)=>{
     const mat=present?new THREE.MeshPhysicalMaterial({
       color:0x3E7BD8,metalness:0,roughness:.26,roughnessMap:iceRough,
       transparent:true,opacity:.94,depthWrite:true,
-      clearcoat:.88,clearcoatRoughness:.16,envMapIntensity:1.0,
-      emissive:0x1E4296,emissiveIntensity:.26
+      clearcoat:.35,clearcoatRoughness:.25,envMapIntensity:.4,
+      emissive:0x1E4296,emissiveIntensity:.38
     }):new THREE.MeshPhysicalMaterial({
       color:0x7090B8,metalness:0,roughness:.4,
       transparent:true,opacity:.04,depthWrite:false,
@@ -1749,19 +1749,19 @@ function resize(){
   }));
 }
 addEventListener("resize",resize);
-/* ── Définition des 3 thèmes ── */
+/* ── Définition du thème verre (fond clair) ── */
 const THEMES={
-  verre:{  /* glace translucide quasi incolore sur fond clair */
-    col:{GLASS:0xD2E0EE,GLASS_S:0x8FB4E6,RED_C:0xD6303E,RED_E:0x8F1220,
-         EDGE_N:0xBFD4F0,EDGE_S:0xD8E6FA,EDGE_R:0xFF6B76,
-         GLOW_N:0xEAF2FC,GLOW_S:0xFF8A94,BLUE_E:0xB8CCE8,STRAT_E:0xE8C4C8,
-         GHOST_C:0xCEDBEC,GHOST_E:0xB0C4DE},
-    mat:{metalness:0,roughness:.4,ice:true,depthWrite:false,ccR:.35},
+  verre:{
+    col:{GLASS:0x3E7BD8,GLASS_S:0x4C8BEC,RED_C:0xEF3346,RED_E:0x8F1220,
+         EDGE_N:0x7FA6E8,EDGE_S:0xA8C0F2,EDGE_R:0xFF4D5C,
+         GLOW_N:0x4E8CFF,GLOW_S:0xFF4757,BLUE_E:0x1E4290,STRAT_E:0x1A3A80,
+         GHOST_C:0xA0B8D0,GHOST_E:0x6080A0},
+    mat:{metalness:0,roughness:.28,ice:true,depthWrite:true,ccR:.18},
     edgeBlend:"normal",
-    envBase:1.05,envRed:.4,ccBase:.85,ccRed:.4,
-    frame:0,glintB:.6,glintA:.35,grid:0,
-    keyI:1.25,rimI:.55,shadows:true,
-    fx:(t,present,ess)=>{if(present){t.opacity=Math.min(1,t.opacity*1.3+.15);t.emissiveI*=.5;}}
+    envBase:.45,envRed:.3,ccBase:.42,ccRed:.3,
+    frame:0,glintB:.55,glintA:.3,grid:0,
+    keyI:1.1,rimI:.45,shadows:false,
+    fx:(t,present,ess)=>{}
   }
 };
 let CURTH="verre";
