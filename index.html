@@ -91,33 +91,34 @@ button{font-family:inherit;color:inherit}
 /* ---------- Rail des domaines ---------- */
 .rail{
   left:20px;top:50%;transform:translateY(-50%);
-  display:flex;flex-direction:column;gap:5px;max-width:210px;
+  display:flex;flex-direction:column;gap:6px;max-width:252px;
 }
 .rail .rlabel{
   font-family:'Montserrat';font-weight:700;font-size:9.5px;letter-spacing:2.5px;
   text-transform:uppercase;color:var(--red);margin:0 0 8px 14px;opacity:.8;
 }
 .dbtn{
-  display:flex;align-items:center;gap:10px;padding:9px 14px;cursor:pointer;
+  display:flex;align-items:center;gap:11px;padding:12px 17px;cursor:pointer;
   text-align:left;transition:all .22s cubic-bezier(.22,1,.36,1);
-  border-radius:10px;color:var(--ink-dim);position:relative;
+  border-radius:12px;color:var(--ink-dim);position:relative;
   border:1px solid transparent;
 }
 .dbtn .idx{
-  font-family:'Montserrat';font-weight:800;font-size:11.5px;color:var(--ink-faint);
-  width:22px;flex-shrink:0;transition:color .2s;
+  font-family:'Montserrat';font-weight:800;font-size:13px;color:var(--ink-faint);
+  width:26px;flex-shrink:0;transition:color .2s;
 }
-.dbtn .dn{font-family:'Montserrat';font-weight:500;font-size:13px;letter-spacing:.2px;color:var(--ink-dim);transition:color .2s}
+.dbtn .dn{font-family:'Montserrat';font-weight:500;font-size:14.5px;letter-spacing:.2px;color:var(--ink-dim);transition:color .2s}
 .dbtn .bar{width:3px;height:0;background:var(--red);border-radius:2px;transition:height .25s;position:absolute;left:0;border-radius:0 2px 2px 0}
-/* HOVER : fond rouge discret, idx rouge vif */
-.dbtn:hover{background:rgba(239,51,70,.08);border-color:rgba(239,51,70,.18)}
+/* HOVER : voile blanc discret */
+.dbtn:hover{background:rgba(255,255,255,.55);border-color:rgba(11,31,78,.10)}
 .dbtn:hover .idx{color:var(--red)}
 .dbtn:hover .dn{color:var(--navy)}
-/* ACTIF (domaine ouvert) */
-.dbtn.on{background:rgba(239,51,70,.12);border-color:rgba(239,51,70,.32);transform:translateX(5px)}
+/* ACTIF (domaine ouvert) : carte blanche épurée, barre rouge, sans décalage */
+.dbtn.on{background:rgba(255,255,255,.93);border-color:rgba(11,31,78,.13);
+  box-shadow:0 10px 30px rgba(11,31,78,.16)}
 .dbtn.on .dn{color:var(--navy);font-weight:700}
-.dbtn.on .idx{color:var(--red);font-size:12.5px}
-.dbtn.on .bar{height:55%}
+.dbtn.on .idx{color:var(--red)}
+.dbtn.on .bar{height:62%}
 @media(max-width:760px){
   .rail{
     left:0;right:0;top:auto;bottom:max(14px, env(safe-area-inset-bottom));transform:none;
@@ -404,7 +405,7 @@ background:rgba(255,255,255,.82);border-radius:100px;box-shadow:0 4px 16px rgba(
 
 <div class="hud hint sg" id="hint">Glisser · Pincer · Sélectionner un domaine</div>
 
-<div class="hud pill dom-pill" id="domPill">
+<div class="hud pill dom-pill" id="domPill" style="display:none">
   <div class="dt sg" id="dpName"></div>
   <div class="dsub sg" id="dpAxes"></div>
   <button class="dom-close" id="dpClose" aria-label="Fermer">✕</button>
@@ -1043,7 +1044,7 @@ DOMAINS.forEach((d,di)=>{
          moins visqueux qu'avant (ça oscille plus longtemps) */
       m.userData.liq={mesh:lqMesh,mat:lqMat,lvl:.28+Math.random()*.46,fill:0,
         wob:lqMat.uniforms.uWob.value,wv:new THREE.Vector2(0,0),
-        k:23+Math.random()*10,dp:2.0+Math.random()*.9};
+        k:23+Math.random()*10,dp:1.15+Math.random()*.75};
       m.userData.phase=Math.random()*Math.PI*2;
       m.userData.phase2=Math.random()*Math.PI*2;
     }
@@ -1262,13 +1263,15 @@ function openSlice(di,cb){
   const g=domainGroups[di];
   /* recadrage doux + la tranche vient TOUJOURS au même endroit devant ;
      le cube restant se referme derrière (pas de trou) */
-  tw(root.rotation,{x:0.16,y:-0.22},850,easeIO);
-  tw(camTgt,{x:-0.85,y:0,z:0.6},850,easeIO);
-  tw(g.userData.anim,{z:(NZ-1)/2*S+OUT,ry:-0.06},900,easeIO,cb);
+  tw(root.rotation,{x:0.16,y:-0.22},1000,easeIO);
+  tw(camTgt,{x:-0.85,y:0,z:0.6},1000,easeIO);
+  /* trajet allongé : le glissement de la tranche se lit bien, et son accélération
+     fait ballotter le liquide (cf. boucle) */
+  tw(g.userData.anim,{z:(NZ-1)/2*S+OUT,ry:-0.06},1250,easeIO,cb);
   const rest=domainGroups.filter((_,i)=>i!==di);
   rest.forEach((og,j)=>{
     const zz=((rest.length-1)/2-j)*S-0.55;
-    tw(og.userData.anim,{z:zz,ry:0},900,easeIO);
+    tw(og.userData.anim,{z:zz,ry:0},1250,easeIO);
   });
   if(camera.aspect<1)tw(camObj,{d:Math.min(CAM.max,CAM.home+3.5)},900,easeIO);
   document.getElementById("dpName").innerHTML=`<span class="di">${DOMAINS[di].id}</span>${DOMAINS[di].name}`;
@@ -1283,8 +1286,8 @@ function closeSliceNow(){
   const di=openDom;if(di<0)return;
   closeCard();
   const g=domainGroups[di];
-  tw(g.userData.anim,{z:domZ(di),ry:0},750,easeIO);
-  domainGroups.forEach((og,i)=>{if(i!==di)tw(og.userData.anim,{z:domZ(i),ry:0},750,easeIO);});
+  tw(g.userData.anim,{z:domZ(di),ry:0},1000,easeIO);
+  domainGroups.forEach((og,i)=>{if(i!==di)tw(og.userData.anim,{z:domZ(i),ry:0},1000,easeIO);});
   if(camera.aspect<1)tw(camObj,{d:CAM.home},750,easeIO);
   tw(camTgt,{x:0,y:0,z:0},750,easeIO);
   openDom=-1;domPill.classList.remove("show");hint.style.opacity=1;
@@ -1670,12 +1673,23 @@ function animate(){
   /* ── Liquide : consigne d'inclinaison globale (l'inertie de rotation), intégrée
         ensuite par le ressort propre de chaque cube ── */
   {
-    LIQ.dtS=Math.min(dtMs,50)/1000;
+    LIQ.dtS=Math.max(.001,Math.min(dtMs,50)/1000);
     LIQ.dX=THREE.MathUtils.clamp(-rotV.vx*9,-.5,.5);     /* yaw   → slosh latéral */
     LIQ.dZ=THREE.MathUtils.clamp( rotV.vy*9,-.5,.5);     /* pitch → slosh avant/arrière */
     LIQ.U.uTime.value=tm;
     const e=root.matrixWorld.elements;                   /* demi-hauteur monde de la cavité tournée */
     LIQ.U.uHalfY.value=(LIQ_CB/2)*(Math.abs(e[1])+Math.abs(e[5])+Math.abs(e[9]));
+    /* axe local Z du monolithe en monde : direction du glissement des tranches */
+    LIQ.zx=e[8]*.012;LIQ.zz=e[10]*.012;
+    /* accélération du glissement de chaque tranche (extraction/retour) → le liquide
+       ballotte avec la vitesse ; une tranche qui vient de loin secoue davantage */
+    domainGroups.forEach(g=>{
+      const gu=g.userData;
+      if(gu.pz===undefined){gu.pz=gu.anim.z;gu.lqv=0;gu.lqa=0;}
+      const v=(gu.anim.z-gu.pz)/LIQ.dtS;
+      gu.lqa=gu.lqa*.72+((v-gu.lqv)/LIQ.dtS)*.28;        /* lissé pour éviter les à-coups */
+      gu.lqv=v;gu.pz=gu.anim.z;
+    });
   }
 
   cellMeshes.forEach(m=>{
@@ -1759,10 +1773,13 @@ function animate(){
       const on=L.fill>.012;
       L.mesh.visible=on;
       if(on){
-        /* intégration du ressort individuel (raideur k, amortissement dp propres) */
-        const dtS=LIQ.dtS;
-        L.wv.x+=(LIQ.dX-L.wob.x)*L.k*dtS;
-        L.wv.y+=(LIQ.dZ-L.wob.y)*L.k*dtS;
+        /* intégration du ressort individuel (raideur k, amortissement dp propres) ;
+           consigne = inertie de rotation + accélération du glissement de la tranche */
+        const dtS=LIQ.dtS,ga=domainGroups[m.userData.di].userData.lqa||0;
+        const dvx=THREE.MathUtils.clamp(LIQ.dX+LIQ.zx*ga,-.65,.65);
+        const dvz=THREE.MathUtils.clamp(LIQ.dZ+LIQ.zz*ga,-.65,.65);
+        L.wv.x+=(dvx-L.wob.x)*L.k*dtS;
+        L.wv.y+=(dvz-L.wob.y)*L.k*dtS;
         const dm=Math.exp(-L.dp*dtS);
         L.wv.x*=dm;L.wv.y*=dm;
         L.wob.x+=L.wv.x*dtS;L.wob.y+=L.wv.y*dtS;
