@@ -2,170 +2,170 @@
 <html lang="fr">
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Cube Liquide — Test Physique</title>
+<title>Cube Liquide — Physique</title>
 <script type="importmap">{"imports":{
   "three":"https://cdn.jsdelivr.net/npm/three@0.161.0/build/three.module.js",
   "three/addons/":"https://cdn.jsdelivr.net/npm/three@0.161.0/examples/jsm/"
 }}</script>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
-body{background:#020912;overflow:hidden;touch-action:none;font-family:monospace}
-#info{position:fixed;top:18px;left:50%;transform:translateX(-50%);
-  color:rgba(120,180,255,.5);font-size:11px;letter-spacing:2px;text-transform:uppercase;pointer-events:none}
-#fps{position:fixed;top:18px;right:18px;color:rgba(100,160,255,.4);font-size:10px}
+body{background:#020912;overflow:hidden;touch-action:none}
+#hud{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);
+  display:flex;gap:14px;align-items:center}
+.btn{background:rgba(40,100,200,.22);border:1px solid rgba(80,160,255,.3);
+  color:rgba(130,190,255,.85);font:700 11px/1 monospace;letter-spacing:2px;
+  padding:9px 16px;border-radius:100px;cursor:pointer;text-transform:uppercase;
+  touch-action:manipulation;user-select:none;transition:all .2s}
+.btn:active{background:rgba(40,100,200,.4);transform:scale(.95)}
+#fps{position:fixed;top:14px;right:16px;color:rgba(80,160,255,.35);font:10px monospace}
+#label{position:fixed;top:14px;left:50%;transform:translateX(-50%);
+  color:rgba(100,180,255,.4);font:11px/1 monospace;letter-spacing:3px;text-transform:uppercase}
 </style>
 </head>
 <body>
-<div id="info">Glisser pour incliner · Scroll pour zoomer</div>
+<div id="label">Drag · Pinch zoom · Secouer</div>
 <div id="fps"></div>
+<div id="hud">
+  <button class="btn" id="bShake">⚡ Secouer</button>
+  <button class="btn" id="bColor">🎨 Couleur</button>
+  <button class="btn" id="bGrav">🌀 Gravité</button>
+</div>
 <script type="module">
 import * as THREE from 'three';
+import {MarchingCubes} from 'three/addons/objects/MarchingCubes.js';
 import {EffectComposer} from 'three/addons/postprocessing/EffectComposer.js';
 import {RenderPass} from 'three/addons/postprocessing/RenderPass.js';
 import {UnrealBloomPass} from 'three/addons/postprocessing/UnrealBloomPass.js';
 import {OutputPass} from 'three/addons/postprocessing/OutputPass.js';
 
-/* ══════════════════ RENDERER ══════════════════ */
+/* ══ Renderer ══ */
 const DPR=Math.min(devicePixelRatio,2);
 const renderer=new THREE.WebGLRenderer({antialias:true});
 renderer.setPixelRatio(DPR);renderer.setSize(innerWidth,innerHeight);
 renderer.outputColorSpace=THREE.SRGBColorSpace;
-renderer.toneMapping=THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure=1.12;
+renderer.toneMapping=THREE.ACESFilmicToneMapping;renderer.toneMappingExposure=1.1;
 renderer.shadowMap.enabled=true;renderer.shadowMap.type=THREE.PCFSoftShadowMap;
 document.body.appendChild(renderer.domElement);
 
 const scene=new THREE.Scene();
 scene.background=new THREE.Color(0x020912);
-scene.fog=new THREE.FogExp2(0x020912,.06);
+scene.fog=new THREE.FogExp2(0x020912,.05);
 
 const camera=new THREE.PerspectiveCamera(38,innerWidth/innerHeight,.1,100);
-camera.position.set(0,1.2,8);camera.lookAt(0,0,0);
+camera.position.set(0,1,9);camera.lookAt(0,0,0);
+let camZ=9,camZv=0; // smoothed zoom
 
 /* Post-processing */
 const rt=new THREE.WebGLRenderTarget(innerWidth*DPR,innerHeight*DPR,{samples:4});
 const composer=new EffectComposer(renderer,rt);
 composer.addPass(new RenderPass(scene,camera));
-const bloom=new UnrealBloomPass(new THREE.Vector2(innerWidth*DPR,innerHeight*DPR),.65,.52,.72);
+const bloom=new UnrealBloomPass(new THREE.Vector2(innerWidth*DPR,innerHeight*DPR),.7,.48,.68);
 composer.addPass(bloom);composer.addPass(new OutputPass());
 
-/* ══════════════════ LUMIÈRES ══════════════════ */
-scene.add(new THREE.AmbientLight(0x8ABAFF,.22));
-const keyL=new THREE.DirectionalLight(0xD0E8FF,.9);
-keyL.position.set(6,12,6);keyL.castShadow=true;
-keyL.shadow.mapSize.set(1024,1024);keyL.shadow.camera.near=.1;keyL.shadow.camera.far=40;
-keyL.shadow.camera.left=keyL.shadow.camera.bottom=-6;keyL.shadow.camera.right=keyL.shadow.camera.top=6;
+/* ══ Lumières ══ */
+scene.add(new THREE.AmbientLight(0x6090FF,.28));
+const keyL=new THREE.DirectionalLight(0xCCE8FF,.95);
+keyL.position.set(5,10,6);keyL.castShadow=true;
+keyL.shadow.mapSize.set(1024,1024);
+Object.assign(keyL.shadow.camera,{left:-5,right:5,top:5,bottom:-5,near:.1,far:30});
 scene.add(keyL);
-/* Lumière caustic : orbite autour du cube, imite la réfraction */
-const causticA=new THREE.PointLight(0x50C0FF,2.8,10);scene.add(causticA);
-const causticB=new THREE.PointLight(0xFF8030,.8,8);scene.add(causticB);
-/* Lumière interne : suit le centre de masse du liquide */
-const innerL=new THREE.PointLight(0x3080FF,1.2,4);scene.add(innerL);
+const causA=new THREE.PointLight(0x40C0FF,3,11);scene.add(causA);
+const causB=new THREE.PointLight(0xFF6030,1,8);scene.add(causB);
+const innerL=new THREE.PointLight(0x2060FF,1.4,5);scene.add(innerL);
+const rimL=new THREE.DirectionalLight(0x304080,.4);rimL.position.set(-4,-2,-6);scene.add(rimL);
 
-/* ══════════════════ CUBE VERRE ══════════════════ */
+/* ══ Groupe cube (tourne avec les particules) ══ */
 const BOX=3.0,HALF=BOX/2;
 const cubeGroup=new THREE.Group();scene.add(cubeGroup);
 
-/* Parois verre — 6 faces séparées pour un meilleur rendu */
+/* Parois verre */
 const glassMat=new THREE.MeshPhysicalMaterial({
-  color:0xA8D4FF,metalness:0,roughness:.04,
-  transparent:true,opacity:.10,depthWrite:false,
-  transmission:.88,thickness:.25,ior:1.48,
-  clearcoat:1,clearcoatRoughness:.04,
-  side:THREE.DoubleSide,envMapIntensity:1.8
-});
+  color:0x90C4FF,metalness:0,roughness:.03,transparent:true,opacity:.09,depthWrite:false,
+  transmission:.90,thickness:.2,ior:1.48,clearcoat:1,clearcoatRoughness:.03,
+  side:THREE.DoubleSide,envMapIntensity:1.6});
 const boxGeo=new THREE.BoxGeometry(BOX,BOX,BOX);
-const glassBox=new THREE.Mesh(boxGeo,glassMat);
-cubeGroup.add(glassBox);
+cubeGroup.add(new THREE.Mesh(boxGeo,glassMat));
 /* Arêtes lumineuses */
-const edgeMat=new THREE.LineBasicMaterial({
-  color:0x6AAEFF,transparent:true,opacity:.7,
+const edgeMat=new THREE.LineBasicMaterial({color:0x5AABFF,transparent:true,opacity:.65,
   blending:THREE.AdditiveBlending,depthWrite:false});
 cubeGroup.add(new THREE.LineSegments(new THREE.EdgesGeometry(boxGeo),edgeMat));
-/* Sol réfléchissant sous le cube */
-const floorMat=new THREE.ShadowMaterial({opacity:.25});
-const floor=new THREE.Mesh(new THREE.PlaneGeometry(14,14),floorMat);
-floor.rotation.x=-Math.PI/2;floor.position.y=-HALF-0.01;floor.receiveShadow=true;
-scene.add(floor);
+/* Sol */
+const floorMesh=new THREE.Mesh(new THREE.PlaneGeometry(14,14),new THREE.ShadowMaterial({opacity:.3}));
+floorMesh.rotation.x=-Math.PI/2;floorMesh.position.y=-HALF-.01;floorMesh.receiveShadow=true;
+scene.add(floorMesh);
 
-/* ══════════════════ PARTICULES SPH ══════════════════ */
-const NP=200;          /* nombre de particules */
-const R=0.155;         /* rayon particule */
-const WALL=HALF-R-.005;
-const G=13;            /* gravité */
-const DAMP=.34;        /* restitution parois */
-const VISC=.055;       /* viscosité */
+/* ══ Couleurs liquide (palette cyclable) ══ */
+const PALETTES=[
+  {c:0x1A7AEE,e:0x002080,n:0x40B0FF}, // bleu eau
+  {c:0x12C888,e:0x006040,n:0x40FFB0}, // vert émeraude
+  {c:0xCC2244,e:0x600010,n:0xFF5080}, // rouge rubis
+  {c:0xA020F0,e:0x400080,n:0xC060FF}, // violet plasma
+  {c:0xF0A000,e:0x704000,n:0xFFD040}, // ambre
+];
+let palIdx=0;
+function getPal(){return PALETTES[palIdx];}
+
+/* ══ MarchingCubes (surface isosurface = vrai liquide unifié) ══ */
+const RES=24; // résolution grille (24³ voxels)
+const liqMat=new THREE.MeshPhysicalMaterial({
+  color:0x1A7AEE,metalness:0,roughness:.04,
+  transparent:true,opacity:.86,depthWrite:false,
+  transmission:.28,ior:1.33,thickness:.35,
+  clearcoat:1,clearcoatRoughness:.02,
+  emissive:0x002080,emissiveIntensity:.10,
+  envMapIntensity:1.8,side:THREE.FrontSide
+});
+const mc=new MarchingCubes(RES,liqMat,true,true,300*5);
+mc.isolation=76; // seuil de fusion des balles
+mc.scale.setScalar(HALF*.97);
+cubeGroup.add(mc);
+
+/* ══ Particules (physique) ══ */
+const NP=280;
+const R=.175,WALL=HALF-R-.004;
+const DAMP=.32,VISC=.06,G=13;
 const px=new Float32Array(NP),py=new Float32Array(NP),pz=new Float32Array(NP);
 const vx=new Float32Array(NP),vy=new Float32Array(NP),vz=new Float32Array(NP);
-/* Init : remplir le bas du cube */
-(function init(){
-  const cols=Math.ceil(Math.cbrt(NP*2));
-  let i=0;
-  for(let ix=0;ix<cols&&i<NP;ix++)
-    for(let iz=0;iz<cols&&i<NP;iz++)
-      for(let iy=0;iy<cols&&i<NP;iy++){
-        if(iy>=cols/2)continue;
-        px[i]=(ix/(cols-1)-.5)*(BOX-2*R-.1);
-        py[i]=(iy/(cols/2-1)-.5)*(HALF-.1)-HALF*.3;
-        pz[i]=(iz/(cols-1)-.5)*(BOX-2*R-.1);
-        vy[i]=(Math.random()-.5)*.3;i++;
+
+function resetParticles(){
+  /* empilement compact en bas */
+  const cols=Math.ceil(Math.cbrt(NP*1.8));
+  let i=0,jitter=.04;
+  outer:for(let iy=0;iy<cols;iy++)
+    for(let ix=0;ix<cols;ix++)
+      for(let iz=0;iz<cols;iz++){
+        if(i>=NP)break outer;
+        const fy=iy/(cols-1);if(fy>.55)continue;
+        px[i]=(ix/(cols-1)-.5)*(BOX-2*R-.12)+(Math.random()-.5)*jitter;
+        py[i]=(iy/(Math.ceil(cols*.55)-1)-.5)*(HALF*.9)-.05+(Math.random()-.5)*jitter;
+        pz[i]=(iz/(cols-1)-.5)*(BOX-2*R-.12)+(Math.random()-.5)*jitter;
+        vx[i]=vy[i]=vz[i]=0;i++;
       }
-  /* compléter avec aléatoire */
   for(;i<NP;i++){
     px[i]=(Math.random()-.5)*(BOX-2*R);
-    py[i]=(Math.random()-.5)*(HALF*.7)-HALF*.2;
+    py[i]=(Math.random()-.5)*HALF*.8-.1;
     pz[i]=(Math.random()-.5)*(BOX-2*R);
+    vx[i]=vy[i]=vz[i]=0;
   }
-})();
-
-/* Sphères instanciées (1 draw call) */
-const sphereGeo=new THREE.SphereGeometry(R,14,10);
-/* Matériau eau / liquide bleu */
-const liqMat=new THREE.MeshPhysicalMaterial({
-  color:0x2A80EE,metalness:0,roughness:.04,
-  transparent:true,opacity:.88,depthWrite:false,
-  transmission:.35,ior:1.33,thickness:.3,
-  clearcoat:1,clearcoatRoughness:.02,
-  emissive:0x0030A0,emissiveIntensity:.12,
-  envMapIntensity:2.0
-});
-const instMesh=new THREE.InstancedMesh(sphereGeo,liqMat,NP);
-instMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-instMesh.castShadow=true;
-cubeGroup.add(instMesh);
-const dummy=new THREE.Object3D();
-
-function pushInstances(){
-  for(let i=0;i<NP;i++){
-    dummy.position.set(px[i],py[i],pz[i]);
-    dummy.updateMatrix();
-    instMesh.setMatrixAt(i,dummy.matrix);
-  }
-  instMesh.instanceMatrix.needsUpdate=true;
 }
+resetParticles();
 
-/* ══════════════════ PHYSIQUE ══════════════════ */
-const _gLocal=new THREE.Vector3();
-const _invQ=new THREE.Quaternion();
-
-function physicsStep(gx,gy,gz,dt){
-  /* intégration Verlet sub-steppée */
-  const SUBS=4,sdt=dt/SUBS;
-  for(let s=0;s<SUBS;s++){
-    /* gravité locale */
+/* ══ Physique SPH ══ */
+const _gL=new THREE.Vector3(),_invQ=new THREE.Quaternion();
+function physics(gx,gy,gz,dt){
+  const S=4,sdt=dt/S;
+  for(let s=0;s<S;s++){
     for(let i=0;i<NP;i++){vx[i]+=gx*sdt;vy[i]+=gy*sdt;vz[i]+=gz*sdt;}
-    /* intégrer positions */
     for(let i=0;i<NP;i++){px[i]+=vx[i]*sdt;py[i]+=vy[i]*sdt;pz[i]+=vz[i]*sdt;}
-    /* collisions parois */
+    const mu=.95;
     for(let i=0;i<NP;i++){
-      if(px[i]<-WALL){px[i]=-WALL;vx[i]=Math.abs(vx[i])*DAMP;vy[i]*=.97;vz[i]*=.97;}
-      if(px[i]> WALL){px[i]= WALL;vx[i]=-Math.abs(vx[i])*DAMP;vy[i]*=.97;vz[i]*=.97;}
-      if(py[i]<-WALL){py[i]=-WALL;vy[i]=Math.abs(vy[i])*DAMP;vx[i]*=.97;vz[i]*=.97;}
-      if(py[i]> WALL){py[i]= WALL;vy[i]=-Math.abs(vy[i])*DAMP;vx[i]*=.97;vz[i]*=.97;}
-      if(pz[i]<-WALL){pz[i]=-WALL;vz[i]=Math.abs(vz[i])*DAMP;vx[i]*=.97;vy[i]*=.97;}
-      if(pz[i]> WALL){pz[i]= WALL;vz[i]=-Math.abs(vz[i])*DAMP;vx[i]*=.97;vy[i]*=.97;}
+      if(px[i]<-WALL){px[i]=-WALL;vx[i]=Math.abs(vx[i])*DAMP;vy[i]*=mu;vz[i]*=mu;}
+      if(px[i]> WALL){px[i]= WALL;vx[i]=-Math.abs(vx[i])*DAMP;vy[i]*=mu;vz[i]*=mu;}
+      if(py[i]<-WALL){py[i]=-WALL;vy[i]=Math.abs(vy[i])*DAMP;vx[i]*=mu;vz[i]*=mu;}
+      if(py[i]> WALL){py[i]= WALL;vy[i]=-Math.abs(vy[i])*DAMP;vx[i]*=mu;vz[i]*=mu;}
+      if(pz[i]<-WALL){pz[i]=-WALL;vz[i]=Math.abs(vz[i])*DAMP;vx[i]*=mu;vy[i]*=mu;}
+      if(pz[i]> WALL){pz[i]= WALL;vz[i]=-Math.abs(vz[i])*DAMP;vx[i]*=mu;vy[i]*=mu;}
     }
-    /* collisions particule-particule (O(N²) ≈ 20k ops : OK pour 200 particules) */
     const D=2*R,D2=D*D;
     for(let i=0;i<NP-1;i++){
       for(let j=i+1;j<NP;j++){
@@ -174,76 +174,127 @@ function physicsStep(gx,gy,gz,dt){
         if(r2<D2&&r2>1e-8){
           const r=Math.sqrt(r2),ov=(D-r)*.5,ir=1/r;
           const nx=dx*ir,ny=dy*ir,nz=dz*ir;
-          /* correction position */
           px[i]-=nx*ov;py[i]-=ny*ov;pz[i]-=nz*ov;
           px[j]+=nx*ov;py[j]+=ny*ov;pz[j]+=nz*ov;
-          /* collision vitesses (restitution partielle) */
           const nd=(vx[i]-vx[j])*nx+(vy[i]-vy[j])*ny+(vz[i]-vz[j])*nz;
-          if(nd>0){
-            const imp=nd*(1+DAMP)*.5;
-            vx[i]-=imp*nx;vy[i]-=imp*ny;vz[i]-=imp*nz;
-            vx[j]+=imp*nx;vy[j]+=imp*ny;vz[j]+=imp*nz;
-          }
-          /* viscosité (mélange des vitesses) */
-          vx[i]+=(vx[j]-vx[i])*VISC;vy[i]+=(vy[j]-vy[i])*VISC;vz[i]+=(vz[j]-vz[i])*VISC;
-          vx[j]-=(vx[j]-vx[i])*VISC;vy[j]-=(vy[j]-vy[i])*VISC;vz[j]-=(vz[j]-vz[i])*VISC;
+          if(nd>0){const k=nd*(1+DAMP)*.5;
+            vx[i]-=k*nx;vy[i]-=k*ny;vz[i]-=k*nz;
+            vx[j]+=k*nx;vy[j]+=k*ny;vz[j]+=k*nz;}
+          const V=VISC;
+          vx[i]+=(vx[j]-vx[i])*V;vy[i]+=(vy[j]-vy[i])*V;vz[i]+=(vz[j]-vz[i])*V;
+          vx[j]-=(vx[j]-vx[i])*V;vy[j]-=(vy[j]-vy[i])*V;vz[j]-=(vz[j]-vz[i])*V;
         }
       }
     }
   }
 }
 
-/* ══════════════════ CONTRÔLE ROTATION ══════════════════ */
-const rot={x:.25,y:-.4};let drag=false,lx=0,ly=0,rvx=0,rvy=0;
+/* MarchingCubes update */
+function buildSurface(){
+  mc.reset();
+  const inv=1/HALF*.97;
+  for(let i=0;i<NP;i++){
+    /* normaliser vers [-1,1] pour MarchingCubes */
+    mc.addBall(px[i]*inv,py[i]*inv,pz[i]*inv,.52,10);
+  }
+}
+
+/* ══ Contrôle rotation & zoom ══ */
+const rot={x:.22,y:-.35};let isDrag=false,lX=0,lY=0,rvX=0,rvY=0;
+let gravMode=0; // 0=normal, 1=inversé, 2=côté
+const G_MODES=[[0,-1,0],[0,1,0],[1,0,0]];
+
 renderer.domElement.addEventListener('pointerdown',e=>{
-  drag=true;lx=e.clientX;ly=e.clientY;rvx=rvy=0;
+  isDrag=true;lX=e.clientX;lY=e.clientY;rvX=rvY=0;
   renderer.domElement.setPointerCapture(e.pointerId);
 });
-renderer.domElement.addEventListener('pointerup',()=>drag=false);
+renderer.domElement.addEventListener('pointerup',()=>isDrag=false);
 renderer.domElement.addEventListener('pointermove',e=>{
-  if(!drag)return;
-  const dx=(e.clientX-lx)*.006,dy=(e.clientY-ly)*.005;
-  rot.y+=dx;rot.x+=dy;rvx=dy;rvy=dx;lx=e.clientX;ly=e.clientY;
-});
+  if(!isDrag)return;
+  const dx=(e.clientX-lX)*.007,dy=(e.clientY-lY)*.006;
+  rot.y+=dx;rot.x+=dy;lX=e.clientX;lY=e.clientY;rvX=dy;rvY=dx;
+  e.preventDefault();
+},{passive:false});
+
+/* Pinch-to-zoom */
+let pinch0=0;
+renderer.domElement.addEventListener('touchstart',e=>{
+  if(e.touches.length===2)pinch0=Math.hypot(
+    e.touches[0].clientX-e.touches[1].clientX,
+    e.touches[0].clientY-e.touches[1].clientY);
+},{passive:true});
+renderer.domElement.addEventListener('touchmove',e=>{
+  if(e.touches.length===2){
+    const d=Math.hypot(e.touches[0].clientX-e.touches[1].clientX,
+      e.touches[0].clientY-e.touches[1].clientY);
+    camZ=THREE.MathUtils.clamp(camZ-(d-pinch0)*.02,3.5,14);
+    pinch0=d;e.preventDefault();
+  }
+},{passive:false});
+/* Wheel (desktop) */
 addEventListener('wheel',e=>{
-  camera.position.z=THREE.MathUtils.clamp(camera.position.z+e.deltaY*.01,4,14);
+  camZ=THREE.MathUtils.clamp(camZ+e.deltaY*.012,3.5,14);
 },{passive:true});
 
-/* ══════════════════ BOUCLE ══════════════════ */
-let last=performance.now(),frames=0,fps=60;
+/* Boutons */
+document.getElementById('bShake').addEventListener('click',()=>{
+  for(let i=0;i<NP;i++){
+    vx[i]+=(Math.random()-.5)*8;vy[i]+=Math.random()*6+2;vz[i]+=(Math.random()-.5)*8;
+  }
+});
+document.getElementById('bColor').addEventListener('click',()=>{
+  palIdx=(palIdx+1)%PALETTES.length;
+  const p=getPal();
+  liqMat.color.setHex(p.c);liqMat.emissive.setHex(p.e);
+  innerL.color.setHex(p.n);
+  edgeMat.color.setHex(p.n);
+  liqMat.needsUpdate=true;
+});
+document.getElementById('bGrav').addEventListener('click',()=>{
+  gravMode=(gravMode+1)%G_MODES.length;
+});
+
+/* ══ Boucle ══ */
 const fpsEl=document.getElementById('fps');
+let last=performance.now(),fps=60,fc=0;
 const _cm=new THREE.Vector3();
 
 function tick(now){
   requestAnimationFrame(tick);
   const dt=Math.min((now-last)/1000,.04);last=now;
-  frames++;if(frames%30===0)fpsEl.textContent=`${Math.round(fps)} fps`;
-  fps=fps*.9+.1/dt;
+  fc++;if(fc%40===0)fpsEl.textContent=`${Math.round(fps)} fps · ${NP} ptcl`;
+  fps=fps*.9+.1/Math.max(dt,.008);
 
   /* inertie rotation */
-  if(!drag){rot.y+=rvy;rot.x+=rvx;rvy*=.88;rvx*=.88;}
+  if(!isDrag){rot.y+=rvY;rot.x+=rvX;rvX*=.86;rvY*=.86;}
   rot.x=THREE.MathUtils.clamp(rot.x,-1.4,1.4);
   cubeGroup.rotation.set(rot.x,rot.y,0);
 
-  /* gravité dans repère local du cube */
-  _invQ.copy(cubeGroup.quaternion).invert();
-  _gLocal.set(0,-G,0).applyQuaternion(_invQ);
-  physicsStep(_gLocal.x,_gLocal.y,_gLocal.z,dt);
-  pushInstances();
+  /* zoom caméra smooth */
+  camera.position.z+=( camZ-camera.position.z)*.1;
 
-  /* centre de masse (monde) pour lumière interne */
+  /* gravité dans repère local */
+  _invQ.copy(cubeGroup.quaternion).invert();
+  const gm=G_MODES[gravMode];
+  _gL.set(gm[0]*G,gm[1]*G,gm[2]*G).applyQuaternion(_invQ);
+  physics(_gL.x,_gL.y,_gL.z,dt);
+
+  /* surface MarchingCubes */
+  buildSurface();
+
+  /* centre de masse → lumière interne */
   let cx=0,cy=0,cz=0;
   for(let i=0;i<NP;i++){cx+=px[i];cy+=py[i];cz+=pz[i];}
   _cm.set(cx/NP,cy/NP,cz/NP).applyMatrix4(cubeGroup.matrixWorld);
   innerL.position.copy(_cm);
 
-  /* lumières caustic orbitales */
+  /* lumières caustic */
   const t=now*.001;
-  causticA.position.set(Math.cos(t*.6)*4,3+Math.sin(t*.35),Math.sin(t*.6)*4);
-  causticA.color.setHSL(.58+Math.sin(t*.18)*.04,.9,.65);
-  causticA.intensity=2.2+.8*Math.sin(t*.9);
-  causticB.position.set(Math.cos(t*.4+2)*3.5,-1.5,Math.sin(t*.4+2)*3.5);
-  causticB.intensity=.6+.4*Math.sin(t*1.1);
+  causA.position.set(Math.cos(t*.55)*4.5,2.8+Math.sin(t*.3)*.8,Math.sin(t*.55)*4.5);
+  causA.intensity=2.6+.9*Math.sin(t*.8);
+  causA.color.setHSL(.58+Math.sin(t*.22)*.05,.92,.62);
+  causB.position.set(Math.cos(t*.38+2)*3.8,-1.8,Math.sin(t*.38+2)*3.8);
+  causB.intensity=.7+.4*Math.sin(t*1.05);
 
   composer.render();
 }
@@ -251,9 +302,9 @@ requestAnimationFrame(tick);
 
 addEventListener('resize',()=>{
   renderer.setSize(innerWidth,innerHeight);
+  camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();
   composer.setSize(innerWidth,innerHeight);
   rt.setSize(innerWidth*DPR,innerHeight*DPR);
-  camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();
 });
 </script>
 </body>
