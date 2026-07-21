@@ -41,10 +41,23 @@ body.dark #i{color:rgba(40,120,255,.38)}
 </head><body>
 <canvas id="gpu"></canvas>
 <div id="i"></div>
+<div id="calc"></div>
+<style>
+#calc{position:fixed;top:calc(12px + env(safe-area-inset-top));left:14px;z-index:5;
+  background:rgba(255,255,255,.78);border:1px solid rgba(11,31,78,.14);border-radius:14px;
+  padding:12px 16px;font:10.5px/1.75 ui-monospace,Menlo,monospace;color:#31518F;min-width:215px}
+#calc .t{font-weight:700;letter-spacing:1.6px;text-transform:uppercase;font-size:9px;
+  color:var(--red);margin-bottom:4px}
+#calc b{color:var(--ink);float:right}
+body.dark #calc{background:rgba(0,40,120,.30);border-color:rgba(40,110,255,.30);color:rgba(100,180,255,.92)}
+body.dark #calc b{color:rgba(170,215,255,.96)}
+@media(max-width:600px){#calc{min-width:178px;font-size:9.5px;padding:10px 12px}}
+</style>
 <div id="ui">
-  <div id="spd"><label>Vitesse</label><input type="range" id="vSlider" min="8" max="150" value="60"><b id="vVal">60</b></div>
+  <div id="spd"><label>Vitesse</label><input type="range" id="vSlider" min="0" max="300" value="60"><b id="vVal">60</b></div>
+  <button class="b" id="bZ">⏸ Pause</button>
   <button class="b" id="bP">💧 Pulse</button>
-  <button class="b" id="bA">⏹ Stop</button>
+  <button class="b" id="bA">🌀 Auto</button>
   <button class="b" id="bC">🎨 Teinte</button>
   <button class="b" id="bT">🌓 Thème</button>
 </div>
@@ -58,13 +71,15 @@ body.dark #i{color:rgba(40,120,255,.38)}
 const url=new URLSearchParams(location.search);
 const IS_TOUCH=matchMedia('(pointer:coarse)').matches;
 const SMALL=IS_TOUCH&&Math.min(screen.width,screen.height)<560;
-const G=Math.max(32,Math.min(72,parseInt(url.get('g'))||(SMALL?40:IS_TOUCH?48:64))); // grille G³
-/* profil du tube : rayon R(y) en cellules — large R0, col Rt au milieu */
-const R0=G*.20, RT=G*.085, YC=G/2, LT=G*.09;      // rayon nominal, col, centre, demi-longueur du col
-const TUBE_H=6.0;                                  // hauteur monde du tube visible
-const Y0=3.0,Y1=G-4.0;                             // bornes axiales sim
-const SCALE=TUBE_H/(Y1-Y0);
-const CTR=G/2;                                     // axe du tube (x,z)
+/* grille NON cubique : tube long et fin couché le long de X */
+const SC_F=SMALL?.62:IS_TOUCH?.78:1;
+const GX=Math.round(96*SC_F),GY=Math.round(32*SC_F),GZ=GY;
+/* profil du tube : rayon R(x) en cellules — conduite R0, col RT au milieu */
+const R0=GY*.30, RT=GY*.135, XC=GX/2, LT=GX*.055; // rayon nominal, col, centre, demi-longueur du col
+const TUBE_L=8.0;                                  // longueur monde du tube
+const X0=3.0,X1=GX-4.0;                            // bornes axiales sim
+const SCALE=TUBE_L/(X1-X0);
+const CY=GY/2,CZ=GZ/2;                             // axe du tube (y,z)
 const P_RADIUS=0.62;
 const DIAM_W=2*P_RADIUS*SCALE;
 const FOV=36*Math.PI/180;
@@ -73,7 +88,8 @@ const SPACING=0.70;
 const FIXED_POINT=1e7;
 let THEME=url.get('theme')||'light';
 let PAL_I=(parseInt(url.get('pal'))||0)%4;
-let GRAV=0.6;                                      // piloté par le slider
+let FLOW=0.6;                                      // force axiale « pompe » (slider)
+let PAUSED=false;
 const PALS=[
  {name:'Bleu',   abs:[[1.90,.85,.18],[2.40,1.15,.26]], glow:[[.16,.32,.70],[.05,.18,.85]], gk:[.28,.58],
   edge:[[.18,.30,.52],[.25,.63,1.0]]},
@@ -85,9 +101,9 @@ const PALS=[
   edge:[[.12,.40,.28],[.18,.95,.62]]},
 ];
 const SUN_W=norm3([.45,.85,.42]);
-/* rayon du tube à l'altitude y (miroir JS de la fonction WGSL) */
-function tubeR(y){
-  const d=Math.abs(y-YC);
+/* rayon du tube à l'abscisse x (miroir JS de la fonction WGSL) */
+function tubeR(x){
+  const d=Math.abs(x-XC);
   const t=Math.min(1,Math.max(0,(d-LT*.5)/(LT*1.6)));
   const s=t*t*(3-2*t);
   return RT+(R0-RT)*s;
@@ -248,17 +264,19 @@ struct SimU{gravity:vec3f, phase:f32, impulse:vec3f, pad:f32}
       cells[id.x].vy=encodeFixedPoint(v.y);
       cells[id.x].vz=encodeFixedPoint(v.z);
       let y:i32=(i32(id.x)/i32(initBoxSize.z))%i32(initBoxSize.y);
+      let z:i32=i32(id.x)%i32(initBoxSize.z);
       if(y<2||y>i32(ceil(realBoxSize.y)-3)){cells[id.x].vy=0;}
+      if(z<2||z>i32(ceil(realBoxSize.z)-3)){cells[id.x].vz=0;}
     }
   }
 }`;
 
 const G2P_WGSL=SIM_COMMON+/*wgsl*/`
 struct Cell{vx:i32,vy:i32,vz:i32,mass:i32}
-override R0:f32; override RT:f32; override YC:f32; override LT:f32; override CTR:f32;
-override Y0:f32; override Y1:f32;
-fn tubeR(y:f32)->f32{
-  let d=abs(y-YC);
+override R0:f32; override RT:f32; override XC:f32; override LT:f32;
+override CY:f32; override CZ:f32; override X0:f32; override X1:f32;
+fn tubeR(x:f32)->f32{
+  let d=abs(x-XC);
   return mix(RT,R0,smoothstep(LT*0.5,LT*1.6,d));
 }
 @group(0) @binding(0) var<storage,read_write> particles:array<Particle>;
@@ -290,31 +308,35 @@ fn tubeR(y:f32)->f32{
       particles[id.x].v+=wv;
     }}}
     particles[id.x].C=B*4.;
+    /* plafond de vitesse (CFL) : le col accélère fortement le jet */
+    let sp=length(particles[id.x].v);
+    if(sp>4.2){particles[id.x].v*=4.2/sp;}
     particles[id.x].position+=particles[id.x].v*dt;
-    /* ── recirculation : sorti par le bas → réinjecté en haut (débit perpétuel) ── */
-    if(particles[id.x].position.y<Y0){
-      particles[id.x].position.y+=(Y1-Y0)-1.0;
-      particles[id.x].v=vec3f(0.,min(particles[id.x].v.y,-.2)*.35,0.);
+    /* ── recirculation : sorti en aval → réinjecté en amont (débit perpétuel) ── */
+    if(particles[id.x].position.x>X1-1.0){
+      particles[id.x].position.x-=(X1-X0)-1.5;
+      particles[id.x].v=vec3f(clamp(particles[id.x].v.x,0.,1.6)*.5,
+        particles[id.x].v.y*.25,particles[id.x].v.z*.25);
       particles[id.x].C=mat3x3f(vec3f(0.),vec3f(0.),vec3f(0.));
     }
     particles[id.x].position=vec3f(
-      clamp(particles[id.x].position.x,1.,realBoxSize.x-2.),
-      clamp(particles[id.x].position.y,1.5,realBoxSize.y-2.),
+      clamp(particles[id.x].position.x,1.5,realBoxSize.x-2.),
+      clamp(particles[id.x].position.y,1.,realBoxSize.y-2.),
       clamp(particles[id.x].position.z,1.,realBoxSize.z-2.));
-    /* ── paroi cylindrique R(y) : ressort SDF radial (prédiction k=2) ── */
+    /* ── paroi cylindrique R(x) : ressort SDF radial en (y,z), prédiction k=2 ── */
     let k=2.0; let wallStiffness=1.0;
     let xN:vec3f=particles[id.x].position+particles[id.x].v*dt*k;
-    let rad=tubeR(xN.y)-1.4;
-    let rel=vec2f(xN.x-CTR,xN.z-CTR);
+    let rad=tubeR(xN.x)-1.4;
+    let rel=vec2f(xN.y-CY,xN.z-CZ);
     let dR=length(rel);
     if(dR>rad){
       let n=rel/max(dR,1e-4);
       let push=wallStiffness*(dR-rad);
-      particles[id.x].v.x-=n.x*push;
+      particles[id.x].v.y-=n.x*push;
       particles[id.x].v.z-=n.y*push;
     }
-    /* plafond doux (au-dessus du point de réinjection) */
-    if(xN.y>Y1-1.){particles[id.x].v.y+=wallStiffness*((Y1-1.)-xN.y);}
+    /* butée douce en amont (derrière le point de réinjection) */
+    if(xN.x<X0+.6){particles[id.x].v.x+=wallStiffness*((X0+.6)-xN.x);}
   }
 }`;
 
@@ -599,18 +621,18 @@ device.addEventListener?.('uncapturederror',e=>console.error('WebGPU:',e.error?.
 ctx=cv.getContext('webgpu');
 presFormat=navigator.gpu.getPreferredCanvasFormat();
 
-/* ---- Particules : colonne remplissant le tube (écoulement immédiat) ---- */
+/* ---- Particules : conduite pleine (écoulement immédiat) ---- */
 const initPos=[];
-for(let y=Y0+.6;y<Y1-1.4;y+=SPACING){
-  const r=tubeR(y)-1.6;
-  for(let x=CTR-r;x<=CTR+r;x+=SPACING)for(let z=CTR-r;z<=CTR+r;z+=SPACING){
-    const dx=x-CTR,dz=z-CTR;
-    if(dx*dx+dz*dz<r*r)
+for(let x=X0+.8;x<X1-1.6;x+=SPACING){
+  const r=tubeR(x)-1.6;
+  for(let y=CY-r;y<=CY+r;y+=SPACING)for(let z=CZ-r;z<=CZ+r;z+=SPACING){
+    const dy=y-CY,dz=z-CZ;
+    if(dy*dy+dz*dz<r*r)
       initPos.push([x+(Math.random()-.5)*.14,y+(Math.random()-.5)*.14,z+(Math.random()-.5)*.14]);
   }
 }
 const NP=initPos.length;
-const CELLS=G*G*G;
+const CELLS=GX*GY*GZ;
 const pData=new Float32Array(NP*20);
 for(let i=0;i<NP;i++){
   pData[i*20]=initPos[i][0];pData[i*20+1]=initPos[i][1];pData[i*20+2]=initPos[i][2];
@@ -625,23 +647,23 @@ const palBuf=U(96),glassBuf=U(64);
 const dirXBuf=U(16),dirYBuf=U(16);
 device.queue.writeBuffer(dtBuf,0,new Float32Array([DT]));
 device.queue.writeBuffer(npBuf,0,new Uint32Array([NP]));
-device.queue.writeBuffer(initBoxBuf,0,new Float32Array([G,G,G]));
-device.queue.writeBuffer(realBoxBuf,0,new Float32Array([G,G,G]));
+device.queue.writeBuffer(initBoxBuf,0,new Float32Array([GX,GY,GZ]));
+device.queue.writeBuffer(realBoxBuf,0,new Float32Array([GX,GY,GZ]));
 device.queue.writeBuffer(dirXBuf,0,new Float32Array([1,0]));
 device.queue.writeBuffer(dirYBuf,0,new Float32Array([0,1]));
 
-/* ---- Maillage verre du tube : surface de révolution du profil R(y) ---- */
+/* ---- Maillage verre du tube : révolution du profil R(x) autour de l'axe X ---- */
 {
-  const SEG=48,RINGS=64,V=[],I=[];
+  const SEG=48,RINGS=96,V=[],I=[];
   for(let j=0;j<=RINGS;j++){
-    const y=Y0+ (Y1-Y0)*j/RINGS;
-    const r=tubeR(y)+.4;
-    const rA=tubeR(Math.min(Y1,y+.4))+.4, rB=tubeR(Math.max(Y0,y-.4))+.4;
+    const x=X0+ (X1-X0)*j/RINGS;
+    const r=tubeR(x)+.4;
+    const rA=tubeR(Math.min(X1,x+.4))+.4, rB=tubeR(Math.max(X0,x-.4))+.4;
     const dr=(rA-rB)/ .8;                      /* dérivée du profil → normale */
     for(let s=0;s<=SEG;s++){
       const a=s/SEG*Math.PI*2, ca=Math.cos(a), sa=Math.sin(a);
-      V.push(CTR+ca*r, y, CTR+sa*r);
-      const n=norm3([ca,-dr,sa]);
+      V.push(x, CY+ca*r, CZ+sa*r);
+      const n=norm3([-dr,ca,sa]);
       V.push(n[0],n[1],n[2]);
     }
   }
@@ -655,16 +677,16 @@ device.queue.writeBuffer(dirYBuf,0,new Float32Array([0,1]));
   device.queue.writeBuffer(glassIB,0,new Uint32Array(I));
   var glassIdxN=I.length;
 }
-/* anneaux lumineux : haut, col (vanne), bas — 24 segments chacun, halo+cœur */
-const RING_YS=[Y1-1,YC,Y0+.6];
-const RSEG=24,EDGE_N=RING_YS.length*RSEG*2;
+/* anneaux lumineux : amont, col (vanne), aval — 24 segments chacun, halo+cœur */
+const RING_XS=[X0+.6,XC,X1-1];
+const RSEG=24,EDGE_N=RING_XS.length*RSEG*2;
 const edgeData=new Float32Array(EDGE_N*12);
 const edgeVB=device.createBuffer({size:edgeData.byteLength,usage:GPUBufferUsage.VERTEX|GPUBufferUsage.COPY_DST});
 const GLOW_N=2;
 const glowData=new Float32Array(GLOW_N*8);
 const glowVB=device.createBuffer({size:glowData.byteLength,usage:GPUBufferUsage.VERTEX|GPUBufferUsage.COPY_DST});
-/* grille→monde : centrage sur l'axe et le milieu du tube */
-function gridToWorld(p){return[(p[0]-CTR)*SCALE,(p[1]-(Y0+Y1)/2)*SCALE,(p[2]-CTR)*SCALE]}
+/* grille→monde : centrage sur le milieu du tube et son axe */
+function gridToWorld(p){return[(p[0]-(X0+X1)/2)*SCALE,(p[1]-CY)*SCALE,(p[2]-CZ)*SCALE]}
 
 /* ---- Textures écran ---- */
 const sampler=device.createSampler({magFilter:'linear',minFilter:'linear'});
@@ -681,7 +703,7 @@ function makePipelines(){
     constants:{...FP,stiffness:50,restDensity:3,dynamicViscosity:.15}}});
   pipes.upd=device.createComputePipeline({layout:auto,compute:{module:mod(UPDATE_WGSL),entryPoint:'updateGrid',constants:FP}});
   pipes.g2p=device.createComputePipeline({layout:auto,compute:{module:mod(G2P_WGSL),entryPoint:'g2p',
-    constants:{...FP,R0:R0,RT:RT,YC:YC,LT:LT,CTR:CTR,Y0:Y0,Y1:Y1}}});
+    constants:{...FP,R0:R0,RT:RT,XC:XC,LT:LT,CY:CY,CZ:CZ,X0:X0,X1:X1}}});
   const depthMod=mod(DEPTH_WGSL);
   pipes.depth=device.createRenderPipeline({layout:auto,
     vertex:{module:depthMod,entryPoint:'vs'},
@@ -877,12 +899,12 @@ function applyPalette(){
     edgeData[o+4]=B[0];edgeData[o+5]=B[1];edgeData[o+6]=B[2];edgeData[o+7]=a;
     edgeData[o+8]=c[0];edgeData[o+9]=c[1];edgeData[o+10]=c[2];edgeData[o+11]=0;o+=12};
   const core=dark?[col[0]*.6+.4,col[1]*.6+.4,col[2]*.6+.4]:col;
-  for(const pass of[0,1])for(const ry of RING_YS){
-    const r=tubeR(ry)+.55;
+  for(const pass of[0,1])for(const rx of RING_XS){
+    const r=tubeR(rx)+.55;
     for(let s=0;s<RSEG;s++){
       const a0=s/RSEG*Math.PI*2,a1=(s+1)/RSEG*Math.PI*2;
-      const A=gridToWorld([CTR+Math.cos(a0)*r,ry,CTR+Math.sin(a0)*r]);
-      const B=gridToWorld([CTR+Math.cos(a1)*r,ry,CTR+Math.sin(a1)*r]);
+      const A=gridToWorld([rx,CY+Math.cos(a0)*r,CZ+Math.sin(a0)*r]);
+      const B=gridToWorld([rx,CY+Math.cos(a1)*r,CZ+Math.sin(a1)*r]);
       if(pass===0)put(A,B,dark?.045:.026,dark?.30:.26,col);
       else put(A,B,dark?.010:.006,dark?.75:.55,core);
     }
@@ -913,8 +935,8 @@ function resize(){
 let pixCap=2.3e6;
 
 /* ═════════════════════════ Contrôles ═════════════════════════ */
-let yaw=.5,pitch=.16,yawV=0,pitchV=0,drag=false,lX=0,lY=0,autoRot=true;
-let distT=11.8,dist=11.8;
+let yaw=.14,pitch=.15,yawV=0,pitchV=0,drag=false,lX=0,lY=0,autoRot=false;
+let distT=9.8,dist=9.8;
 cv.addEventListener('pointerdown',e=>{drag=true;autoRot=false;bA.textContent='🌀 Auto';
   lX=e.clientX;lY=e.clientY;yawV=0;pitchV=0;cv.setPointerCapture(e.pointerId)});
 cv.addEventListener('pointerup',()=>drag=false);
@@ -931,16 +953,38 @@ cv.addEventListener('touchmove',e=>{if(e.touches.length===2){
   const d=Math.hypot(e.touches[0].clientX-e.touches[1].clientX,e.touches[0].clientY-e.touches[1].clientY);
   distT=Math.max(6,Math.min(19,distT-(d-pinch0)*.02));pinch0=d;e.preventDefault()}},{passive:false});
 let pulse=0;
-const bA=document.getElementById('bA');
+const bA=document.getElementById('bA'),bZ=document.getElementById('bZ');
 document.getElementById('bP').addEventListener('click',()=>pulse=1);
+bZ.addEventListener('click',()=>{PAUSED=!PAUSED;bZ.textContent=PAUSED?'▶ Reprendre':'⏸ Pause'});
 bA.addEventListener('click',()=>{autoRot=!autoRot;bA.textContent=autoRot?'⏹ Stop':'🌀 Auto'});
 document.getElementById('bC').addEventListener('click',()=>{PAL_I=(PAL_I+1)%PALS.length;applyPalette()});
 document.getElementById('bT').addEventListener('click',()=>{
   THEME=THEME==='dark'?'light':'dark';
   document.body.classList.toggle('dark',THEME==='dark');
   bakeEnv();bakeBackdrop();makeBindgroups();applyPalette()});
+/* ── Calcul analytique venturi / vena contracta (continuité + Bernoulli) ──
+   Échelle de référence : conduite D1 = 50 mm ; v1 = 2 m/s au réglage 100. */
 const vSlider=document.getElementById('vSlider'),vVal=document.getElementById('vVal');
-const setSpeed=v=>{GRAV=v/100*1.4;vVal.textContent=v};
+const calcEl=document.getElementById('calc');
+const D1mm=50, beta=RT/R0, D2mm=D1mm*beta, Cc=0.62, RHO=1000;
+function updCalc(v){
+  const v1=v/100*2;                        // m/s (échelle d'affichage)
+  const v2=beta>0?v1/(beta*beta):0;        // continuité : v2 = v1·(A1/A2) = v1/β²
+  const Dvc=D2mm*Math.sqrt(Cc);            // vena contracta : A_vc = Cc·A2
+  const vvc=Cc>0?v2/Cc:0;
+  const dP=.5*RHO*(v2*v2-v1*v1)/1000;      // Bernoulli, en kPa
+  calcEl.innerHTML=`<div class="t">Venturi · analytique</div>
+    D₁ / D₂ <b>${D1mm} / ${D2mm.toFixed(1)} mm</b><br>
+    β = D₂/D₁ <b>${beta.toFixed(2)}</b><br>
+    Rapport d'aires A₁/A₂ <b>${(1/(beta*beta)).toFixed(1)}</b><br>
+    v₁ conduite <b>${v1.toFixed(2)} m/s</b><br>
+    v₂ col (continuité) <b>${v2.toFixed(2)} m/s</b><br>
+    ΔP Bernoulli <b>${dP.toFixed(1)} kPa</b><br>
+    Vena contracta C𝑐 <b>${Cc.toFixed(2)}</b><br>
+    D à la vena contracta <b>${Dvc.toFixed(1)} mm</b><br>
+    v à la vena contracta <b>${vvc.toFixed(2)} m/s</b>`;
+}
+const setSpeed=v=>{FLOW=v/100;vVal.textContent=v;updCalc(v)};
 vSlider.addEventListener('input',e=>setSpeed(+e.target.value));
 setSpeed(+vSlider.value);
 if(url.has('kick'))setInterval(()=>pulse=1,3000);
@@ -953,11 +997,11 @@ const ruData=new Float32Array(100);
 const simuData=new Float32Array(8);
 const iEl=document.getElementById('i');
 let last=performance.now(),fps=60,fc=0;
-console.log(`Tube venturi MLS-MPM · grille ${G}³ · ${NP} particules · R0=${R0.toFixed(1)} col=${RT.toFixed(1)}`);
+console.log(`Tube venturi MLS-MPM · grille ${GX}×${GY}×${GZ} · ${NP} particules · R0=${R0.toFixed(1)} col=${RT.toFixed(1)}`);
 /* modèle grille→monde (translation+échelle, sans rotation : la caméra orbite) */
 const model=new Float32Array(16);
 model[0]=SCALE;model[5]=SCALE;model[10]=SCALE;model[15]=1;
-model[12]=-CTR*SCALE;model[13]=-(Y0+Y1)/2*SCALE;model[14]=-CTR*SCALE;
+model[12]=-(X0+X1)/2*SCALE;model[13]=-CY*SCALE;model[14]=-CZ*SCALE;
 function frame(now){
   requestAnimationFrame(frame);
   const dtMs=Math.min(now-last,50);last=now;
@@ -977,24 +1021,25 @@ function frame(now){
   ruData.set(proj,4);ruData.set(m4invPersp(proj),20);ruData.set(viewModel,36);
   ruData.set(m4invRigid(view),52);ruData.set(view,68);ruData.set(model,84);
   device.queue.writeBuffer(ruBuf,0,ruData);
-  simuData[0]=0;simuData[1]=-GRAV;simuData[2]=0;
+  /* force axiale « pompe » + très légère gravité transverse */
+  simuData[0]=FLOW;simuData[1]=-.05;simuData[2]=0;
   simuData[3]=0;
-  if(pulse){simuData[5]=-1.1;pulse=0}else simuData[5]=0;
-  simuData[4]=0;simuData[6]=0;
+  if(pulse){simuData[4]=1.2;pulse=0}else simuData[4]=0;
+  simuData[5]=0;simuData[6]=0;
   device.queue.writeBuffer(simuBuf,0,simuData);
   /* halos : col de la vanne (la restriction « travaille ») */
   {
     const dark=THEME==='dark'?1:0,p=PALS[PAL_I];
     const gc=p.glow[dark],breath=.8+.2*Math.sin(now*.0016);
-    const w1=gridToWorld([CTR,YC,CTR]),w2=gridToWorld([CTR,YC-LT*1.2,CTR]);
-    glowData.set([w1[0],w1[1],w1[2],TUBE_H*.10,gc[0]*.7+.15,gc[1]*.7+.25,gc[2]*.7+.45,(dark?.55:.20)*breath],0);
-    glowData.set([w2[0],w2[1],w2[2],TUBE_H*.07,gc[0],gc[1],gc[2],(dark?.32:.12)*breath],8);
+    const w1=gridToWorld([XC,CY,CZ]),w2=gridToWorld([XC+LT*1.4,CY,CZ]);
+    glowData.set([w1[0],w1[1],w1[2],TUBE_L*.055,gc[0]*.7+.15,gc[1]*.7+.25,gc[2]*.7+.45,(dark?.55:.20)*breath],0);
+    glowData.set([w2[0],w2[1],w2[2],TUBE_L*.04,gc[0],gc[1],gc[2],(dark?.32:.12)*breath],8);
     device.queue.writeBuffer(glowVB,0,glowData);
   }
   device.queue.writeBuffer(glassBuf,48,new Float32Array([now*.001]));
   const enc=device.createCommandEncoder();
   const wgP=Math.ceil(NP/64),wgC=Math.ceil(CELLS/64);
-  for(let s=0;s<SUBSTEPS;s++){
+  for(let s=0;s<(PAUSED?0:SUBSTEPS);s++){
     const c=enc.beginComputePass();
     c.setPipeline(pipes.clear);c.setBindGroup(0,bgs.clear);c.dispatchWorkgroups(wgC);
     c.setPipeline(pipes.p2g1);c.setBindGroup(0,bgs.p2g1);c.dispatchWorkgroups(wgP);
