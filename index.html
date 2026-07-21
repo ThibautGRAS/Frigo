@@ -436,7 +436,7 @@ background:rgba(255,255,255,.82);border-radius:100px;box-shadow:0 4px 16px rgba(
 <script>
 /* Garde-fous : jamais d'écran noir muet */
 window.__bootOK=false;
-window.__APP_VERSION="v2.6";
+window.__APP_VERSION="v2.7";
 window.addEventListener("DOMContentLoaded",function(){
   var v=document.getElementById("loaderVer");
   if(v)v.textContent=window.__APP_VERSION;
@@ -1106,7 +1106,7 @@ DOMAINS.forEach((d,di)=>{
     sp.position.set(cellLocal(ai,0).x,yUp,0.4);sp.userData={type:"axe",index:ai};
   });
   LEVIERS.forEach((l,li)=>{const sp=lab(l.id,SHORT[l.id],"#123A7E",.29);
-    sp.position.set(-((NX-1)/2*S+1.55),cellLocal(0,li).y,0.4);sp.userData={type:"levier",index:li};});
+    sp.position.set(-((NX-1)/2*S+1.25),cellLocal(0,li).y,0.4);sp.userData={type:"levier",index:li};});
 });
 
 /* ---- Étiquettes A/L persistantes et cliquables (cube fermé) ---- */
@@ -1290,7 +1290,7 @@ function openSlice(di,cb){
   /* recadrage doux + la tranche vient TOUJOURS au même endroit devant ;
      le cube restant se referme derrière (pas de trou) */
   tw(root.rotation,{x:0.16,y:-0.22},1000,easeIO);
-  tw(camTgt,{x:-0.85,y:CTY,z:0.6},1000,easeIO);
+  tw(camTgt,{x:-1.75,y:CTY,z:0.6},1000,easeIO);   /* tranche + étiquettes dégagées du rail */
   /* trajet allongé : le glissement de la tranche se lit bien, et son accélération
      fait ballotter le liquide (cf. boucle) */
   tw(g.userData.anim,{z:(NZ-1)/2*S+OUT,ry:-0.06},1250,easeIO,cb);
@@ -1988,7 +1988,7 @@ function animate(){
   const panelOpen=card.classList.contains("show");
   const wide=camera.aspect>=1;
   const panelW=Math.min(430,innerWidth);
-  const shiftWorld=(panelW/innerWidth)*camDist*Math.tan(THREE.MathUtils.degToRad(camera.fov/2))*camera.aspect*0.42;
+  const shiftWorld=(panelW/innerWidth)*camDist*Math.tan(THREE.MathUtils.degToRad(camera.fov/2))*camera.aspect*0.34;
   const wantShift=(panelOpen&&wide)?shiftWorld:0;
   panelShift+=(wantShift-panelShift)*Math.min(1,dt*1.4);
   camera.position.set(camTgt.x*.6+panelShift,camY+camTgt.y,camDist);
