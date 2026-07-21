@@ -436,7 +436,7 @@ background:rgba(255,255,255,.82);border-radius:100px;box-shadow:0 4px 16px rgba(
 <script>
 /* Garde-fous : jamais d'écran noir muet */
 window.__bootOK=false;
-window.__APP_VERSION="v2.4";
+window.__APP_VERSION="v2.5";
 window.addEventListener("DOMContentLoaded",function(){
   var v=document.getElementById("loaderVer");
   if(v)v.textContent=window.__APP_VERSION;
@@ -729,7 +729,7 @@ const selLight=new THREE.PointLight(0xEF3346,0,9,2);scene.add(selLight);
 selLight.userData={to:0,pos:new THREE.Vector3()};
 
 const root=new THREE.Group();scene.add(root);
-const HOME={x:0.28,y:-0.6};
+const HOME={x:0.17,y:-0.22};   /* vue de base quasi frontale : axes et leviers lisibles */
 root.rotation.set(HOME.x,HOME.y,0);
 const rotV={vx:0,vy:0};
 const idle={px:0,py:0};
@@ -1153,7 +1153,7 @@ const zF=frontZ+0.75, xR=(NX-1)/2*S+1.05;
   });
   LEVIERS.forEach((l,li)=>{
     const sp=axisLabel(l.id,SHORT[l.id],"#123A7E","levier",li,
-      new THREE.Vector3((face==="front"?-1:1)*((NX-1)/2*S+0.85),cellLocal(0,li).y,zz),.51);
+      new THREE.Vector3((face==="front"?-1:1)*((NX-1)/2*S+1.25),cellLocal(0,li).y,zz),.51);
     sp.userData.face=face;
   });
 });
@@ -1520,7 +1520,7 @@ canvas.addEventListener("pointermove",e=>{
   drag.moved+=Math.abs(dx)+Math.abs(dy);
   root.rotation.y+=dx*0.005;
   root.rotation.x=THREE.MathUtils.clamp(root.rotation.x+dy*0.004,-1.1,1.1);
-  rotV.vx=dx*0.003;rotV.vy=dy*0.0024;
+  /* la vitesse d'inertie est mesurée par frame dans la boucle (relâcher = continu) */
 },{passive:false});
 function endPtr(e){
   pointers.delete(e.pointerId);
@@ -1623,12 +1623,10 @@ function startPres(){
   closeCard();if(openDom>=0)closeSliceNow();
   helpov.classList.remove("show");
   caption(`<span class="pc-red">●</span>Stratégie R&amp;D — vue d'ensemble`);
-  const rp={y:root.rotation.y};
-  tw(rp,{y:root.rotation.y+Math.PI*2},6500,easeIO);
-  presInt=setInterval(()=>{root.rotation.y=rp.y;},16);
-  tw(camObj,{d:CAM.home+3},3000,easeIO);
-  pWait(6600,()=>{
-    clearInterval(presInt);presInt=null;
+  /* ouverture sobre : léger recul + balayage doux, pas de tour complet */
+  tw(camObj,{d:CAM.home+3},2600,easeIO);
+  tw(root.rotation,{x:HOME.x+0.05,y:HOME.y-0.42},3000,easeIO);
+  pWait(3100,()=>{
     tw(camObj,{d:CAM.home},1400,easeIO);
     tw(root.rotation,{x:HOME.x,y:HOME.y},1200,easeIO);
     pWait(1300,()=>stepAxis(0));
@@ -1839,8 +1837,15 @@ function animate(){
         /* intégration du ressort individuel (raideur k, amortissement dp propres) ;
            consigne = inertie de rotation + accélération du glissement de la tranche */
         const dtS=LIQ.dtS,ga=domainGroups[m.userData.di].userData.lqa||0;
-        const dvx=THREE.MathUtils.clamp(LIQ.dX+LIQ.zx*ga,-.65,.65);
-        const dvz=THREE.MathUtils.clamp(LIQ.dZ+LIQ.zz*ga,-.65,.65);
+        let ddx=LIQ.dX+LIQ.zx*ga,ddz=LIQ.dZ+LIQ.zz*ga;
+        if(L.red){
+          /* sujets vivants : bercement continu doux, déphasé par cube */
+          const ph=L.mat.uniforms.uPhase.value;
+          ddx+=Math.sin(tm*.85+ph)*.065+Math.sin(tm*.47+ph*2.1)*.045;
+          ddz+=Math.cos(tm*.71+ph*1.4)*.065+Math.sin(tm*.39+ph)*.040;
+        }
+        const dvx=THREE.MathUtils.clamp(ddx,-.65,.65);
+        const dvz=THREE.MathUtils.clamp(ddz,-.65,.65);
         L.wv.x+=(dvx-L.wob.x)*L.k*dtS;
         L.wv.y+=(dvz-L.wob.y)*L.k*dtS;
         const dm=Math.exp(-L.dp*LIQCFG.visc*dtS);
@@ -1849,14 +1854,16 @@ function animate(){
         /* agitation splash : souris rapide ou arrivée de tranche, retombée ~1 s */
         const at=Math.max(LIQ.agitT,Math.min(1,Math.abs(ga)*.02));
         L.agit=Math.max(L.agit*Math.exp(-1.9*dtS),at);
-        /* cubes rouges : micro-splash spontané, désynchronisé (premier tirage aléatoire
-           au remplissage, jamais tous en même temps), et bien visible */
+        /* cubes rouges : vie continue (agitation plancher qui respire) + surges
+           doux et désynchronisés — plus de brutal on/off */
         if(L.red&&L.fill>L.lvl*.7){
+          const ph=L.mat.uniforms.uPhase.value;
+          L.agit=Math.max(L.agit,.09+.07*(Math.sin(tm*.8+ph)*.5+.5));
           if(L.pulseT===0)L.pulseT=tm+.8+Math.random()*6.5;
           else if(tm>L.pulseT){
-            L.pulseT=tm+3.5+Math.random()*6;
-            L.agit=Math.max(L.agit,.48+Math.random()*.28);
-            L.wv.x+=(Math.random()-.5)*.9;L.wv.y+=(Math.random()-.5)*.9;
+            L.pulseT=tm+4+Math.random()*6;
+            L.agit=Math.max(L.agit,.30+Math.random()*.15);
+            L.wv.x+=(Math.random()-.5)*.5;L.wv.y+=(Math.random()-.5)*.5;
           }
         }
         L.mat.uniforms.uAgit.value=L.agit;
@@ -1942,18 +1949,24 @@ function animate(){
   glintL.intensity=THA.glintB+THA.glintA*Math.sin(tm*.5);
 
   /* inertie + oscillation douce au repos (le cube ne tourne plus en continu) */
-  if(!drag.on){
+  const oy=Math.sin(tm*.5)*.028, ox=Math.sin(tm*.34+1.3)*.014;
+  if(drag.on){
+    /* vitesse réellement mesurée par frame → au relâchement, l'élan continue sans à-coup */
+    rotV.vx=rotV.vx*.35+(root.rotation.y-(idle.prY??root.rotation.y))*.65;
+    rotV.vy=rotV.vy*.35+(root.rotation.x-(idle.prX??root.rotation.x))*.65;
+    idle.py=oy;idle.px=ox;                  /* phase d'oscillation synchronisée */
+  }else{
     root.rotation.y+=rotV.vx;
     root.rotation.x=THREE.MathUtils.clamp(root.rotation.x+rotV.vy,-1.1,1.1);
     rotV.vx*=.94;rotV.vy*=.94;
     if(Math.abs(rotV.vx)<1e-5)rotV.vx=0;
     if(Math.abs(rotV.vy)<1e-5)rotV.vy=0;
     if(openDom<0&&!presOn&&rotV.vx===0&&rotV.vy===0){
-      const oy=Math.sin(tm*.5)*.028, ox=Math.sin(tm*.34+1.3)*.014;
       root.rotation.y+=oy-idle.py;idle.py=oy;
       root.rotation.x+=ox-idle.px;idle.px=ox;
-    }
+    }else{idle.py=oy;idle.px=ox;}           /* re-synchro : pas de saut à la reprise */
   }
+  idle.prY=root.rotation.y;idle.prX=root.rotation.x;
   root.position.y=Math.sin(tm*.6)*.06;
 
   /* poussière dérivante */
