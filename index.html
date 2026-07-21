@@ -64,8 +64,8 @@ button{font-family:inherit;color:inherit}
 .brand .logo-img{height:23px;display:block}
 .brand .sub{font-size:9px;letter-spacing:2.6px;text-transform:uppercase;color:var(--ink-dim);margin-top:5px;font-family:'Montserrat';font-weight:600}
 .title-block{text-align:center;position:fixed;top:max(16px, env(safe-area-inset-top));left:50%;transform:translateX(-50%);pointer-events:none}
-.title-block .ey{font-family:'Montserrat';font-weight:600;font-size:8px;letter-spacing:3px;color:var(--red);text-transform:uppercase;opacity:.75}
-.title-block h1{font-family:'Montserrat';font-weight:700;font-size:18px;letter-spacing:.4px;color:var(--navy);margin-top:4px}
+.title-block .ey{font-family:'Montserrat';font-weight:600;font-size:10.5px;letter-spacing:3.4px;color:var(--red);text-transform:uppercase;opacity:.8}
+.title-block h1{font-family:'Montserrat';font-weight:700;font-size:24px;letter-spacing:.4px;color:var(--navy);margin-top:5px}
 @media(max-width:760px){.title-block{display:none}}
 
 .pill{
@@ -92,17 +92,30 @@ button{font-family:inherit;color:inherit}
 .rail{
   left:20px;top:50%;transform:translateY(-50%);
   display:flex;flex-direction:column;gap:6px;max-width:252px;
+  max-height:calc(100vh - 130px);overflow-y:auto;scrollbar-width:none;
+  padding-right:4px;
 }
+.rail::-webkit-scrollbar{display:none}
 .rail .rlabel{
   font-family:'Montserrat';font-weight:700;font-size:9.5px;letter-spacing:2.5px;
   text-transform:uppercase;color:var(--red);margin:0 0 8px 14px;opacity:.8;
 }
 .dbtn{
   display:flex;align-items:center;gap:11px;padding:12px 17px;cursor:pointer;
-  text-align:left;transition:all .22s cubic-bezier(.22,1,.36,1);
+  text-align:left;transition:background-color .22s,border-color .22s;
   border-radius:12px;color:var(--ink-dim);position:relative;
   border:1px solid transparent;
 }
+/* rail : pas de flou d'arrière-plan (coûteux au-dessus du canvas animé → saccades) */
+.rail .dbtn{backdrop-filter:none;-webkit-backdrop-filter:none;background:rgba(255,255,255,.60);
+  box-shadow:none;border-color:rgba(11,31,78,.07)}
+.rail .dbtn:hover{background:rgba(255,255,255,.82)}
+.rail .dbtn.on{background:rgba(255,255,255,.95);border-color:rgba(11,31,78,.13);
+  box-shadow:0 10px 30px rgba(11,31,78,.16)}
+/* entrées axes / leviers : plus compactes que les domaines */
+.dbtn.axl{padding:7.5px 17px;border-radius:10px}
+.dbtn.axl .dn{font-size:13px;font-weight:500}
+.dbtn.axl .idx{font-size:11.5px}
 .dbtn .idx{
   font-family:'Montserrat';font-weight:800;font-size:13px;color:var(--ink-faint);
   width:26px;flex-shrink:0;transition:color .2s;
@@ -661,6 +674,9 @@ const tweens=[];
 const easeIO=t=>t<.5?4*t*t*t:1-Math.pow(-2*t+2,3)/2;
 const easeO=t=>1-Math.pow(1-t,3);
 function tw(o,to,dur,ease,done){
+  /* un seul tween par objet : le nouveau remplace l'ancien (transitions continues,
+     pas de double écriture quand on enchaîne les domaines) */
+  for(let i=tweens.length-1;i>=0;i--)if(tweens[i].o===o)tweens.splice(i,1);
   const from={};for(const k in to)from[k]=o[k];
   tweens.push({o,from,to,t:0,dur,ease:ease||easeIO,done});
 }
@@ -1280,6 +1296,9 @@ function openSlice(di,cb){
     AXES.map(a=>`<b>${a.id}</b>\u202f${axShort[a.id]||a.name}`).join("  ·  ");
   domPill.classList.add("show");
   hint.style.opacity=0;
+  /* dans tous les cas (rail, étiquette 3D, cube, deep-link) : la fiche du domaine
+     s'affiche à droite — sauf si on vient ouvrir une brique précise (cb) */
+  if(!cb)fillDomCard(di);
   syncRail();setTargets();
 }
 function closeSliceNow(){
@@ -1344,7 +1363,26 @@ function openMeta(type,index){
       <ul class="vlist">${it.dev.map(v=>`<li>${v}</li>`).join("")}</ul></div>`;
   card.classList.add("show");
   document.getElementById("cBody").scrollTop=0;
-  highlightMeta();
+  highlightMeta();syncRail();
+}
+/* ---- Fiche Domaine (présentée à droite, sans assombrir la scène) ---- */
+function fillDomCard(di){
+  const d=DOMAINS[di];
+  const own=Object.values(CELLS).filter(c=>c.d===di);
+  const ess=own.filter(c=>c.essential).length;
+  document.getElementById("cEye").innerHTML=`Domaine scientifique · dimension Z`;
+  document.getElementById("cTitle").textContent=d.id+" — "+d.name;
+  document.getElementById("cBadges").innerHTML=
+    `<span class="cb hot">${ess} essentielles</span><span class="cb">${own.length-ess} secondaires</span>`;
+  document.getElementById("cBody").innerHTML=`
+    <div class="csec"><div class="st sg">Périmètre</div>
+      <p><b>${d.sub}</b>. Caractérisation des ${d.obj} sur ${d.sys}, au moyen de ${d.moyen}, jusqu'aux ${d.solu}.</p></div>
+    <div class="csec"><div class="st sg">Projets phares</div>
+      <div class="projli">${d.proj.map(p=>`<div class="proj"><span class="pd"></span>${p}</div>`).join("")}</div></div>
+    <div class="csec"><div class="st sg">Explorer</div>
+      <p>Touchez une brique de la tranche pour sa fiche détaillée, ou un intitulé A/L pour la lecture croisée.</p></div>`;
+  card.classList.add("show");
+  document.getElementById("cBody").scrollTop=0;
 }
 /* ---- Fiche Domaine (clic sur D1–D5 latéral, cube fermé) ---- */
 function openDomInfo(di){
@@ -1367,7 +1405,7 @@ function openDomInfo(di){
   card.classList.add("show");
   document.getElementById("cBody").scrollTop=0;
   document.getElementById("openSliceBtn").addEventListener("click",()=>{openSlice(di);});
-  setTargets();
+  setTargets();syncRail();
 }
 /* ---- Fiche Axe / Levier contextualisée au domaine ouvert ---- */
 function openMetaCtx(type,index){
@@ -1402,13 +1440,14 @@ function openMetaCtx(type,index){
   card.classList.add("show");
   document.getElementById("cBody").scrollTop=0;
   document.querySelectorAll(".linkb").forEach(b=>b.addEventListener("click",()=>openCard(b.dataset.k)));
-  setTargets();
+  setTargets();syncRail();
 }
 function closeCard(){
-  if(!cardKey && !metaKey)return;
-  cardKey=null;metaKey=null;card.classList.remove("show");
+  card.classList.remove("show");
+  if(!cardKey && !metaKey)return;    /* fiche domaine sans surlignage : juste masquer */
+  cardKey=null;metaKey=null;
   document.getElementById("cTrl").style.width="0";
-  clearLinks();setTargets();
+  clearLinks();setTargets();syncRail();
 }
 document.getElementById("cClose").addEventListener("click",closeCard);
 
@@ -1416,13 +1455,35 @@ document.getElementById("cClose").addEventListener("click",closeCard);
 const rail=document.getElementById("rail");
 DOMAINS.forEach((d,i)=>{
   const b=document.createElement("button");
-  b.className="pill dbtn";
+  b.className="pill dbtn dom";
   b.innerHTML=`<span class="bar"></span><span class="idx sg">0${i+1}</span><span class="dn sg">${d.name}</span>`;
   b.addEventListener("click",()=>{stopPres();openDom===i?closeSliceNow():openSlice(i);});
   rail.appendChild(b);
 });
+/* le panneau présente aussi les axes stratégiques et les leviers transverses */
+function railSection(label,items,type){
+  const l=document.createElement("div");
+  l.className="rlabel sg";l.style.marginTop="15px";l.textContent=label;
+  rail.appendChild(l);
+  items.forEach((it,i)=>{
+    const b=document.createElement("button");
+    b.className="pill dbtn axl";
+    b._meta={type,index:i};
+    b.innerHTML=`<span class="bar"></span><span class="idx sg">${it.id}</span><span class="dn sg">${it.name}</span>`;
+    b.addEventListener("click",()=>{stopPres();
+      if(metaKey&&metaKey.type===type&&metaKey.index===i){closeCard();return;}
+      openDom>=0?openMetaCtx(type,i):openMeta(type,i);});
+    rail.appendChild(b);
+  });
+}
+railSection("Axes stratégiques",AXES,"axe");
+railSection("Leviers transverses",LEVIERS,"levier");
 function syncRail(){
-  document.querySelectorAll(".dbtn").forEach((b,i)=>b.classList.toggle("on",i===openDom));
+  document.querySelectorAll(".dbtn.dom").forEach((b,i)=>b.classList.toggle("on",i===openDom));
+  document.querySelectorAll(".dbtn.axl").forEach(b=>{
+    const u=b._meta;
+    b.classList.toggle("on",!!(metaKey&&metaKey.type===u.type&&metaKey.index===u.index));
+  });
 }
 
 /* ════════════════════ AIDE & ACCUEIL ════════════════════ */
