@@ -14,7 +14,7 @@
 html,body{height:100%;overflow:hidden;overscroll-behavior:none;position:fixed;width:100%;touch-action:none;
   background:linear-gradient(175deg,#F2F6FC 0%,#E6EEF8 35%,#D8E4F2 65%,#CDD9ED 100%)}
 body.dark{background:radial-gradient(120% 100% at 50% 40%,#0A1B38 0%,#010810 100%)}
-canvas{position:fixed;inset:0;width:100%;height:100%;display:block}
+#gpu{position:fixed;inset:0;width:100%;height:100%;display:block}
 #ui{position:fixed;bottom:calc(18px + env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);
   display:flex;gap:9px;z-index:5;align-items:center;flex-wrap:wrap;justify-content:center}
 .b{background:rgba(255,255,255,.78);border:1px solid rgba(11,31,78,.16);color:#31518F;
@@ -42,6 +42,7 @@ body.dark #i{color:rgba(40,120,255,.38)}
 <canvas id="gpu"></canvas>
 <div id="i"></div>
 <div id="calc"></div>
+<canvas id="chart" width="264" height="118"></canvas>
 <style>
 #calc{position:fixed;top:calc(12px + env(safe-area-inset-top));left:14px;z-index:5;
   background:rgba(255,255,255,.78);border:1px solid rgba(11,31,78,.14);border-radius:14px;
@@ -52,6 +53,11 @@ body.dark #i{color:rgba(40,120,255,.38)}
 body.dark #calc{background:rgba(0,40,120,.30);border-color:rgba(40,110,255,.30);color:rgba(100,180,255,.92)}
 body.dark #calc b{color:rgba(170,215,255,.96)}
 @media(max-width:600px){#calc{min-width:178px;font-size:9.5px;padding:10px 12px}}
+#chart{position:fixed;left:14px;bottom:calc(18px + env(safe-area-inset-bottom));z-index:5;
+  width:264px;height:118px;
+  background:rgba(255,255,255,.78);border:1px solid rgba(11,31,78,.14);border-radius:14px}
+body.dark #chart{background:rgba(0,40,120,.28);border-color:rgba(40,110,255,.30)}
+@media(max-width:900px){#chart{display:none}}
 </style>
 <div id="ui">
   <div id="spd"><label>Vitesse</label><input type="range" id="vSlider" min="0" max="300" value="60"><b id="vVal">60</b></div>
@@ -337,6 +343,26 @@ fn tubeR(x:f32)->f32{
     }
     /* butée douce en amont (derrière le point de réinjection) */
     if(xN.x<X0+.6){particles[id.x].v.x+=wallStiffness*((X0+.6)-xN.x);}
+  }
+}`;
+
+/* ---- Mesure GPU : vitesse axiale moyenne (conduite amont + col) ---- */
+const STATS_WGSL=/*wgsl*/`
+struct Particle{position:vec3f, v:vec3f, C:mat3x3f}
+struct Stat{c1:atomic<i32>,s1:atomic<i32>,c2:atomic<i32>,s2:atomic<i32>}
+override XC:f32; override LT:f32;
+@group(0) @binding(0) var<storage,read> particles:array<Particle>;
+@group(0) @binding(1) var<storage,read_write> st:Stat;
+@group(0) @binding(2) var<uniform> numParticles:u32;
+@compute @workgroup_size(64) fn stats(@builtin(global_invocation_id) id:vec3u){
+  if(id.x<numParticles){
+    let x=particles[id.x].position.x;
+    let vx=particles[id.x].v.x;
+    if(abs(x-XC)<LT*.55){                       /* tranche du col */
+      atomicAdd(&st.c2,1);atomicAdd(&st.s2,i32(vx*1e4));
+    }else if(x>XC-LT*7.&&x<XC-LT*5.){           /* tranche conduite amont */
+      atomicAdd(&st.c1,1);atomicAdd(&st.s1,i32(vx*1e4));
+    }
   }
 }`;
 
@@ -645,6 +671,8 @@ const U=sz=>device.createBuffer({size:sz,usage:GPUBufferUsage.UNIFORM|GPUBufferU
 const ruBuf=U(400),simuBuf=U(32),dtBuf=U(4),npBuf=U(4),initBoxBuf=U(16),realBoxBuf=U(16);
 const palBuf=U(96),glassBuf=U(64);
 const dirXBuf=U(16),dirYBuf=U(16);
+const statBuf=device.createBuffer({size:16,usage:GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST|GPUBufferUsage.COPY_SRC});
+const statRead=device.createBuffer({size:16,usage:GPUBufferUsage.COPY_DST|GPUBufferUsage.MAP_READ});
 device.queue.writeBuffer(dtBuf,0,new Float32Array([DT]));
 device.queue.writeBuffer(npBuf,0,new Uint32Array([NP]));
 device.queue.writeBuffer(initBoxBuf,0,new Float32Array([GX,GY,GZ]));
@@ -704,6 +732,8 @@ function makePipelines(){
   pipes.upd=device.createComputePipeline({layout:auto,compute:{module:mod(UPDATE_WGSL),entryPoint:'updateGrid',constants:FP}});
   pipes.g2p=device.createComputePipeline({layout:auto,compute:{module:mod(G2P_WGSL),entryPoint:'g2p',
     constants:{...FP,R0:R0,RT:RT,XC:XC,LT:LT,CY:CY,CZ:CZ,X0:X0,X1:X1}}});
+  pipes.stats=device.createComputePipeline({layout:auto,compute:{module:mod(STATS_WGSL),entryPoint:'stats',
+    constants:{XC:XC,LT:LT}}});
   const depthMod=mod(DEPTH_WGSL);
   pipes.depth=device.createRenderPipeline({layout:auto,
     vertex:{module:depthMod,entryPoint:'vs'},
@@ -783,6 +813,7 @@ function makeBindgroups(){
   bgs.p2g2=bg(pipes.p2g2,[ub(particleBuf),ub(cellBuf),ub(initBoxBuf),ub(npBuf),ub(densityBuf),ub(dtBuf)]);
   bgs.upd=bg(pipes.upd,[ub(cellBuf),ub(realBoxBuf),ub(initBoxBuf),ub(simuBuf),ub(dtBuf)]);
   bgs.g2p=bg(pipes.g2p,[ub(particleBuf),ub(cellBuf),ub(realBoxBuf),ub(initBoxBuf),ub(npBuf),ub(dtBuf)]);
+  bgs.stats=bg(pipes.stats,[ub(particleBuf),ub(statBuf),ub(npBuf)]);
   bgs.depth=bg(pipes.depth,[ub(particleBuf),ub(ruBuf)]);
   bgs.thick=bg(pipes.thick,[ub(particleBuf),ub(ruBuf)]);
   bgs.nrfX=bg(pipes.nrf1,[depthA.createView(),ub(dirXBuf)]);
@@ -962,27 +993,88 @@ document.getElementById('bT').addEventListener('click',()=>{
   THEME=THEME==='dark'?'light':'dark';
   document.body.classList.toggle('dark',THEME==='dark');
   bakeEnv();bakeBackdrop();makeBindgroups();applyPalette()});
-/* ── Calcul analytique venturi / vena contracta (continuité + Bernoulli) ──
-   Échelle de référence : conduite D1 = 50 mm ; v1 = 2 m/s au réglage 100. */
+/* ── Physique analytique + mesure simulation ─────────────────────────────
+   Calibration : conduite D1 = 50 mm ⇒ 1 cellule = D1/(2·R0) m.
+   Vitesses grille converties en m/s via la cadence sim réelle (fps mesuré).
+   Théorie : continuité v2 = v1/β², Bernoulli ΔP = ½ρ(v2²−v1²) = ½ρv2²(1−β⁴),
+   débitmétrie ISO 5167 (Cd venturi ≈ 0,97), vena contracta Cc = 0,62,
+   cavitation si p2 = p1 − ΔP < p_vap (σ < 1). */
 const vSlider=document.getElementById('vSlider'),vVal=document.getElementById('vVal');
 const calcEl=document.getElementById('calc');
-const D1mm=50, beta=RT/R0, D2mm=D1mm*beta, Cc=0.62, RHO=1000;
+const D1mm=50, beta=RT/R0, D2mm=D1mm*beta, Cc=0.62, Cd=0.97, RHO=1000,
+      NU=1e-6, P1=101.3, PVAP=2.34;                       // kPa (eau 20 °C)
+const CELL_M=(D1mm/1000)/(2*R0);                          // m par cellule
+const A1=Math.PI*Math.pow(D1mm/2000,2);                   // m²
+const MEAS={v1:0,v2:0,pending:false};
+const vms=vGrid=>vGrid*CELL_M*(fps*SUBSTEPS*DT);          // cellules/u → m/s (cadence réelle)
 function updCalc(v){
-  const v1=v/100*2;                        // m/s (échelle d'affichage)
-  const v2=beta>0?v1/(beta*beta):0;        // continuité : v2 = v1·(A1/A2) = v1/β²
-  const Dvc=D2mm*Math.sqrt(Cc);            // vena contracta : A_vc = Cc·A2
-  const vvc=Cc>0?v2/Cc:0;
-  const dP=.5*RHO*(v2*v2-v1*v1)/1000;      // Bernoulli, en kPa
-  calcEl.innerHTML=`<div class="t">Venturi · analytique</div>
+  const est1=v/100*2;                                     // estimation si mesure pas prête
+  const v1=MEAS.v1>0?vms(MEAS.v1):est1;
+  const v2m=MEAS.v2>0?vms(MEAS.v2):0;
+  const v2t=beta>0?v1/(beta*beta):0;                      // continuité
+  const err=v2m>0?((v2m-v2t)/v2t*100):null;
+  const dP=.5*RHO*(v2t*v2t-v1*v1)/1000;                   // kPa
+  const p2=P1-dP;
+  const sig=v2t>1e-3?(P1-PVAP)/(.5*RHO*v2t*v2t/1000):1e9; // nombre de cavitation
+  const cav=p2<PVAP;
+  const Q=v1*A1*3600;                                     // m³/h
+  const Re1=v1*(D1mm/1000)/NU, Re2=v2t*(D2mm/1000)/NU;
+  const vvc=v2t/Cc, Dvc=D2mm*Math.sqrt(Cc);
+  const QisoLh=Cd*(Math.PI*Math.pow(D2mm/2000,2))*Math.sqrt(Math.max(0,2*dP*1000/(RHO*(1-Math.pow(beta,4)))))*3600;
+  calcEl.innerHTML=`<div class="t">Venturi · sim ↔ théorie</div>
     D₁ / D₂ <b>${D1mm} / ${D2mm.toFixed(1)} mm</b><br>
     β = D₂/D₁ <b>${beta.toFixed(2)}</b><br>
     Rapport d'aires A₁/A₂ <b>${(1/(beta*beta)).toFixed(1)}</b><br>
-    v₁ conduite <b>${v1.toFixed(2)} m/s</b><br>
-    v₂ col (continuité) <b>${v2.toFixed(2)} m/s</b><br>
+    v₁ mesurée (sim) <b>${v1.toFixed(2)} m/s</b><br>
+    v₂ mesurée (sim) <b>${v2m>0?v2m.toFixed(2)+' m/s':'—'}</b><br>
+    v₂ théorie v₁/β² <b>${v2t.toFixed(2)} m/s</b><br>
+    ${err!=null?`écart sim / théorie <b>${err>0?'+':''}${err.toFixed(0)} %</b><br>`:''}
     ΔP Bernoulli <b>${dP.toFixed(1)} kPa</b><br>
-    Vena contracta C𝑐 <b>${Cc.toFixed(2)}</b><br>
-    D à la vena contracta <b>${Dvc.toFixed(1)} mm</b><br>
-    v à la vena contracta <b>${vvc.toFixed(2)} m/s</b>`;
+    p₂ = p₁ − ΔP <b>${p2.toFixed(1)} kPa</b>${cav?' <b style="color:#EF3346">⚠ cavitation</b>':''}<br>
+    σ cavitation <b>${sig<100?sig.toFixed(2):'—'}</b><br>
+    Débit Q = v₁A₁ <b>${Q.toFixed(1)} m³/h</b><br>
+    Q ISO 5167 (C𝑑 ${Cd}) <b>${QisoLh.toFixed(1)} m³/h</b><br>
+    Re₁ conduite <b>${(Re1/1000).toFixed(0)} k</b> — Re₂ col <b>${(Re2/1000).toFixed(0)} k</b><br>
+    Vena contracta (C𝑐 ${Cc}) :<br>
+    D𝑣𝑐 <b>${Dvc.toFixed(1)} mm</b><br>
+    v𝑣𝑐 = v₂/C𝑐 <b>${vvc.toFixed(2)} m/s</b>`;
+  drawChart(v1);
+}
+/* ── Graphe p(x) / v(x) le long du profil (analytique, continuité+Bernoulli) ── */
+const chart=document.getElementById('chart'),chx=chart.getContext('2d');
+function drawChart(v1){
+  const W=chart.width,H=chart.height,dark=THEME==='dark';
+  chx.clearRect(0,0,W,H);
+  const N=110,pad=10,y0=14,h=H-y0-14;
+  let vmax=0,pmin=1e9,pmax=-1e9;
+  const vs=[],ps=[];
+  for(let i=0;i<=N;i++){
+    const x=X0+(X1-X0)*i/N;
+    const vv=v1*Math.pow(R0/tubeR(x),2);
+    const pp=P1+.5*RHO*(v1*v1-vv*vv)/1000;
+    vs.push(vv);ps.push(pp);
+    vmax=Math.max(vmax,vv);pmin=Math.min(pmin,pp);pmax=Math.max(pmax,pp);
+  }
+  /* profil du tube en fond */
+  chx.fillStyle=dark?'rgba(90,140,220,.18)':'rgba(11,31,78,.08)';
+  chx.beginPath();
+  for(let i=0;i<=N;i++){const x=X0+(X1-X0)*i/N;
+    chx.lineTo(pad+(W-2*pad)*i/N,H/2-(tubeR(x)/R0)*h*.30)}
+  for(let i=N;i>=0;i--){const x=X0+(X1-X0)*i/N;
+    chx.lineTo(pad+(W-2*pad)*i/N,H/2+(tubeR(x)/R0)*h*.30)}
+  chx.fill();
+  const line=(arr,lo,hi,color)=>{
+    chx.strokeStyle=color;chx.lineWidth=1.6;chx.beginPath();
+    for(let i=0;i<=N;i++){
+      const t=hi>lo?(arr[i]-lo)/(hi-lo):.5;
+      chx.lineTo(pad+(W-2*pad)*i/N,y0+h*(1-t));
+    }chx.stroke()};
+  line(vs,0,vmax*1.05,'#EF3346');
+  line(ps,Math.min(pmin,0),pmax,dark?'#7FB2FF':'#0B1F4E');
+  chx.font='700 8.5px monospace';
+  chx.fillStyle='#EF3346';chx.fillText('v(x)',pad+2,y0+7);
+  chx.fillStyle=dark?'#7FB2FF':'#0B1F4E';chx.fillText('p(x)',pad+30,y0+7);
+  if(pmin<PVAP){chx.fillStyle='#EF3346';chx.fillText('⚠ p<p_vap au col',W-104,y0+7)}
 }
 const setSpeed=v=>{FLOW=v/100;vVal.textContent=v;updCalc(v)};
 vSlider.addEventListener('input',e=>setSpeed(+e.target.value));
@@ -1048,6 +1140,16 @@ function frame(now){
     c.setPipeline(pipes.g2p);c.setBindGroup(0,bgs.g2p);c.dispatchWorkgroups(wgP);
     c.end();
   }
+  /* mesure GPU des vitesses moyennes (conduite + col), relecture asynchrone */
+  let doMeas=false;
+  if(!PAUSED&&!MEAS.pending&&fc%30===0){
+    doMeas=true;
+    device.queue.writeBuffer(statBuf,0,new Int32Array(4));
+    const c=enc.beginComputePass();
+    c.setPipeline(pipes.stats);c.setBindGroup(0,bgs.stats);c.dispatchWorkgroups(wgP);
+    c.end();
+    enc.copyBufferToBuffer(statBuf,0,statRead,0,16);
+  }
   const pass=(view,clear,load)=>enc.beginRenderPass({colorAttachments:[{view,
     clearValue:clear,loadOp:load||'clear',storeOp:'store'}]});
   {
@@ -1089,6 +1191,17 @@ function frame(now){
     p.end();
   }
   device.queue.submit([enc.finish()]);
+  if(doMeas){
+    MEAS.pending=true;
+    statRead.mapAsync(GPUMapMode.READ).then(()=>{
+      const a=new Int32Array(statRead.getMappedRange().slice(0));
+      statRead.unmap();
+      if(a[0]>30)MEAS.v1=a[1]/1e4/a[0];
+      if(a[2]>30)MEAS.v2=a[3]/1e4/a[2];
+      MEAS.pending=false;
+      updCalc(+vSlider.value);
+    }).catch(()=>{MEAS.pending=false});
+  }
 }
 requestAnimationFrame(frame);
 addEventListener('resize',resize);
