@@ -441,7 +441,7 @@ background:rgba(255,255,255,.82);border-radius:100px;box-shadow:0 4px 16px rgba(
 <script>
 /* Garde-fous : jamais d'écran noir muet */
 window.__bootOK=false;
-window.__APP_VERSION="v2.14";
+window.__APP_VERSION="v2.15";
 window.addEventListener("DOMContentLoaded",function(){
   var v=document.getElementById("loaderVer");
   if(v)v.textContent=window.__APP_VERSION;
@@ -943,11 +943,15 @@ void main(){
   float lvl=(uFill*2.-1.)*uHalfY;
   float s=dot(vW-uCenter,N)-lvl;
   float wA=clamp(length(uWob)*4.,0.,1.);
-  float rip=sin(vW.x*26.+uTime*5.2+uPhase)*.6+sin(vW.z*23.-uTime*4.3+uPhase*1.7)*.4;
-  s+=rip*uHalfY*.06*(.2+wA+uAgit*1.4);
-  /* splash : clapot vif haute fréquence quand le cube est secoué */
-  float chop=sin(vW.x*54.+uTime*11.3+uPhase)*sin(vW.z*47.-uTime*9.1+uPhase*2.3);
-  s+=chop*uHalfY*.055*uAgit;
+  /* vagues directionnelles obliques (non alignées aux axes) : pas de quadrillage moiré */
+  float w1=dot(vW.xz,vec2(.80,.60)),w2=dot(vW.xz,vec2(-.55,.83)),w3=dot(vW.xz,vec2(.30,-.95));
+  float p1=w1*14.+uTime*4.6+uPhase,p2=w2*11.-uTime*3.7+uPhase*1.7;
+  float rip=sin(p1)*.55+sin(p2)*.45;
+  s+=rip*uHalfY*.07*(.2+wA+uAgit*1.3);
+  /* splash : clapot oblique modéré quand le cube est secoué */
+  float p3=w3*26.+uTime*9.6+uPhase*2.3,p4=w1*22.-uTime*7.8;
+  float chop=sin(p3)*sin(p4);
+  s+=chop*uHalfY*.05*uAgit;
   if(s>0.)discard;
   vec3 V=normalize(cameraPosition-vW);
   vec3 col;
@@ -958,15 +962,17 @@ void main(){
     float fr=pow(1.-abs(dot(vNW,V)),3.);
     col+=uColor*fr*.5+vec3(fr*.10);
   }else{
-    /* faces arrière visibles = surface du liquide (normale perturbée → reflets) */
-    vec3 nS=normalize(N+vec3(cos(vW.x*26.+uTime*5.2+uPhase)+cos(vW.x*54.+uTime*11.3)*uAgit,
-      0.,cos(vW.z*23.-uTime*4.3)+cos(vW.z*47.-uTime*9.1)*uAgit)*.15*(.3+wA+uAgit));
+    /* surface : gradient cohérent des vagues → normale douce, sans motif croisé */
+    float k=.11*(.3+wA+uAgit);
+    vec2 grad=(cos(p1)*.55*vec2(.80,.60)+cos(p2)*.45*vec2(-.55,.83))*k
+             +(cos(p3)*sin(p4)*vec2(.30,-.95)+sin(p3)*cos(p4)*vec2(.80,.60))*k*1.6*uAgit;
+    vec3 nS=normalize(N+vec3(grad.x,0.,grad.y));
     col=uColor*1.16;
-    float sp=pow(max(dot(reflect(-uSun,nS),V),0.),90.);
-    col+=vec3(1.,.98,.95)*sp*(1.15+uAgit*.8);
+    float sp=pow(max(dot(reflect(-uSun,nS),V),0.),48.);
+    col+=vec3(1.,.98,.95)*sp*(.95+uAgit*.6);
     col+=uColor*.22*max(dot(nS,uSun),0.);
     /* écume de surface pendant le splash */
-    col=mix(col,vec3(.93,.97,1.),clamp(uAgit*(.28+.55*abs(chop)),0.,.65));
+    col=mix(col,vec3(.93,.97,1.),clamp(uAgit*(.28+.5*abs(chop)),0.,.6));
   }
   /* ligne d'eau lumineuse, élargie et blanchie par l'agitation */
   float wl=smoothstep(-.026-.06*uAgit,-.004,s);
