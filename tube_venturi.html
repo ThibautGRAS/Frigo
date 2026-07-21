@@ -137,6 +137,10 @@ body.dark #chart{background:rgba(0,40,120,.28);border-color:rgba(40,110,255,.30)
     D₁ = 50 mm et convertit via la cadence réelle de simulation. L'écart sim/théorie
     reflète les limites du modèle MLS-MPM : fluide légèrement compressible, parois en
     ressort, recirculation de bouclage — quelques % en régime établi.</p>
+    <p><b>Bouclage</b> : l'eau sortie en aval est réinjectée à l'admission <i>en veine
+    pleine</i> (répartition uniforme sur toute la section, comme derrière une pompe) —
+    l'amont reste plein, sans contraction parasite ; la pression affichée est saturée à
+    p_vap, comme dans la réalité (au-delà, l'eau vaporise au lieu de « descendre »).</p>
   </div>
 </div></div>
 
@@ -364,6 +368,11 @@ fn tubeR(x:f32)->f32{
   if(SHARP>.5){return select(R0,RT,d<PLATE);}      /* diaphragme à arête vive */
   return mix(RT,R0,smoothstep(LT*0.5,LT*1.6,d));   /* venturi lisse */
 }
+fn hash01(n0:u32)->f32{
+  var n=n0*747796405u+2891336453u;
+  n=((n>>((n>>28u)+4u))^n)*277803737u;
+  return f32((n>>22u)^n)/4294967295.;
+}
 @group(0) @binding(0) var<storage,read_write> particles:array<Particle>;
 @group(0) @binding(1) var<storage,read> cells:array<Cell>;
 @group(0) @binding(2) var<uniform> realBoxSize:vec3f;
@@ -397,11 +406,16 @@ fn tubeR(x:f32)->f32{
     let sp=length(particles[id.x].v);
     if(sp>4.2){particles[id.x].v*=4.2/sp;}
     particles[id.x].position+=particles[id.x].v*dt;
-    /* ── recirculation : sorti en aval → réinjecté en amont (débit perpétuel) ── */
+    /* ── recirculation : sorti en aval → réinjecté en amont EN VEINE PLEINE
+          (disque complet R0, étalé axialement) — l'admission n'hérite pas du
+          profil contracté du jet aval : pas de fausse vena contracta amont ── */
     if(particles[id.x].position.x>X1-1.0){
-      particles[id.x].position.x-=(X1-X0)-1.5;
-      particles[id.x].v=vec3f(clamp(particles[id.x].v.x,0.,1.6)*.5,
-        particles[id.x].v.y*.25,particles[id.x].v.z*.25);
+      let seed=id.x*2654435761u+bitcast<u32>(particles[id.x].position.y);
+      let u1=hash01(seed);let u2=hash01(seed+1013u);let u3=hash01(seed+2027u);
+      let rr=(R0-2.2)*sqrt(u1);
+      let an=6.2831853*u2;
+      particles[id.x].position=vec3f(X0+.8+u3*5.,CY+rr*cos(an),CZ+rr*sin(an));
+      particles[id.x].v=vec3f(.6,0.,0.);
       particles[id.x].C=mat3x3f(vec3f(0.),vec3f(0.),vec3f(0.));
     }
     particles[id.x].position=vec3f(
@@ -1147,9 +1161,11 @@ function updCalc(v){
      contracta (diaphragme, plus sévère car v_vc = v₂/Cc) */
   const vRef=orif?vvc:v2t;
   const dP=.5*RHO*(v2t*v2t-v1*v1)/1000;                   // kPa (prises amont/col)
-  const pMin=P1-.5*RHO*(vRef*vRef-v1*v1)/1000;
+  const pRaw=P1-.5*RHO*(vRef*vRef-v1*v1)/1000;
+  const cav=pRaw<PVAP;
+  /* l'eau vaporise à p_vap : la pression réelle ne descend pas en dessous */
+  const pMin=Math.max(pRaw,PVAP);
   const sig=vRef>1e-3?(P1-PVAP)/(.5*RHO*vRef*vRef/1000):1e9;
-  const cav=pMin<PVAP;
   const Q=v1*A1*3600;                                     // m³/h
   const Re1=v1*(D1mm/1000)/NU, Re2=v2t*(D2mm/1000)/NU;
   const QisoLh=CdM*(Math.PI*Math.pow(D2mm/2000,2))*Math.sqrt(Math.max(0,2*dP*1000/(RHO*(1-Math.pow(beta,4)))))*3600;
@@ -1162,7 +1178,8 @@ function updCalc(v){
     v₂ théorie v₁/β² <b>${v2t.toFixed(2)} m/s</b><br>
     ${err!=null?`écart sim / théorie <b>${err>0?'+':''}${err.toFixed(0)} %</b><br>`:''}
     ΔP Bernoulli <b>${dP.toFixed(1)} kPa</b><br>
-    p mini (${orif?'vena contracta':'col'}) <b>${pMin.toFixed(1)} kPa</b>${cav?' <b style="color:#EF3346">⚠ cavitation</b>':''}<br>
+    p mini (${orif?'vena contracta':'col'}) <b>${pMin.toFixed(1)} kPa${cav?' = p_vap':''}</b><br>
+    ${cav?`<span style="color:#EF3346;font-weight:700">⚠ cavitation (p atteint p_vap)</span><br>`:''}
     σ cavitation <b>${sig<100?sig.toFixed(2):'—'}</b><br>
     Débit Q = v₁A₁ <b>${Q.toFixed(1)} m³/h</b><br>
     Q ISO 5167 (C𝑑 ${CdM}) <b>${QisoLh.toFixed(1)} m³/h</b><br>
@@ -1185,7 +1202,8 @@ function drawChart(v1){
   for(let i=0;i<=N;i++){
     const x=X0+(X1-X0)*i/N;
     const vv=v1*Math.pow(R0/tubeR(x),2);
-    const pp=P1+.5*RHO*(v1*v1-vv*vv)/1000;
+    /* pression saturée à p_vap : en dessous, l'eau vaporise (cavitation) */
+    const pp=Math.max(P1+.5*RHO*(v1*v1-vv*vv)/1000,PVAP);
     vs.push(vv);ps.push(pp);
     vmax=Math.max(vmax,vv);pmin=Math.min(pmin,pp);pmax=Math.max(pmax,pp);
   }
@@ -1204,11 +1222,11 @@ function drawChart(v1){
       chx.lineTo(pad+(W-2*pad)*i/N,y0+h*(1-t));
     }chx.stroke()};
   line(vs,0,vmax*1.05,'#EF3346');
-  line(ps,Math.min(pmin,0),pmax,dark?'#7FB2FF':'#0B1F4E');
+  line(ps,0,pmax,dark?'#7FB2FF':'#0B1F4E');
   chx.font='700 8.5px monospace';
   chx.fillStyle='#EF3346';chx.fillText('v(x)',pad+2,y0+7);
   chx.fillStyle=dark?'#7FB2FF':'#0B1F4E';chx.fillText('p(x)',pad+30,y0+7);
-  if(pmin<PVAP){chx.fillStyle='#EF3346';chx.fillText('⚠ p<p_vap au col',W-104,y0+7)}
+  if(pmin<=PVAP+.01){chx.fillStyle='#EF3346';chx.fillText('⚠ p = p_vap : cavitation',W-128,y0+7)}
 }
 const setSpeed=v=>{FLOW=v/100;vVal.textContent=v;updCalc(v)};
 vSlider.addEventListener('input',e=>setSpeed(+e.target.value));
