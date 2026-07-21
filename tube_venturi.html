@@ -61,6 +61,7 @@ body.dark #chart{background:rgba(0,40,120,.28);border-color:rgba(40,110,255,.30)
 </style>
 <div id="ui">
   <div id="spd"><label>Vitesse</label><input type="range" id="vSlider" min="0" max="300" value="60"><b id="vVal">60</b></div>
+  <button class="b" id="bG">⭘ Diaphragme</button>
   <button class="b" id="bZ">⏸ Pause</button>
   <button class="b" id="bP">💧 Pulse</button>
   <button class="b" id="bA">🌀 Auto</button>
@@ -107,9 +108,13 @@ const PALS=[
   edge:[[.12,.40,.28],[.18,.95,.62]]},
 ];
 const SUN_W=norm3([.45,.85,.42]);
-/* rayon du tube à l'abscisse x (miroir JS de la fonction WGSL) */
+/* deux appareils : venturi lisse (convergent doux) ou diaphragme à arête vive
+   (plaque mince) — seul le second crée une vraie vena contracta en aval */
+let MODE='venturi';
+const PLATE=1.1;                                   // demi-épaisseur de la plaque (cellules)
 function tubeR(x){
   const d=Math.abs(x-XC);
+  if(MODE==='orifice')return d<PLATE?RT:R0;
   const t=Math.min(1,Math.max(0,(d-LT*.5)/(LT*1.6)));
   const s=t*t*(3-2*t);
   return RT+(R0-RT)*s;
@@ -281,9 +286,11 @@ const G2P_WGSL=SIM_COMMON+/*wgsl*/`
 struct Cell{vx:i32,vy:i32,vz:i32,mass:i32}
 override R0:f32; override RT:f32; override XC:f32; override LT:f32;
 override CY:f32; override CZ:f32; override X0:f32; override X1:f32;
+override SHARP:f32; override PLATE:f32;
 fn tubeR(x:f32)->f32{
   let d=abs(x-XC);
-  return mix(RT,R0,smoothstep(LT*0.5,LT*1.6,d));
+  if(SHARP>.5){return select(R0,RT,d<PLATE);}      /* diaphragme à arête vive */
+  return mix(RT,R0,smoothstep(LT*0.5,LT*1.6,d));   /* venturi lisse */
 }
 @group(0) @binding(0) var<storage,read_write> particles:array<Particle>;
 @group(0) @binding(1) var<storage,read> cells:array<Cell>;
@@ -680,30 +687,63 @@ device.queue.writeBuffer(realBoxBuf,0,new Float32Array([GX,GY,GZ]));
 device.queue.writeBuffer(dirXBuf,0,new Float32Array([1,0]));
 device.queue.writeBuffer(dirYBuf,0,new Float32Array([0,1]));
 
-/* ---- Maillage verre du tube : révolution du profil R(x) autour de l'axe X ---- */
+/* ---- Maillage verre du tube : révolution du profil R(x), reconstruit au
+        changement d'appareil (venturi ↔ diaphragme) ---- */
+const SEG=48,RINGS=192;
+const glassVB=device.createBuffer({size:(RINGS+1)*(SEG+1)*6*4,
+  usage:GPUBufferUsage.VERTEX|GPUBufferUsage.COPY_DST});
+let glassIdxN=0,glassIB;
 {
-  const SEG=48,RINGS=96,V=[],I=[];
-  for(let j=0;j<=RINGS;j++){
-    const x=X0+ (X1-X0)*j/RINGS;
-    const r=tubeR(x)+.4;
-    const rA=tubeR(Math.min(X1,x+.4))+.4, rB=tubeR(Math.max(X0,x-.4))+.4;
-    const dr=(rA-rB)/ .8;                      /* dérivée du profil → normale */
-    for(let s=0;s<=SEG;s++){
-      const a=s/SEG*Math.PI*2, ca=Math.cos(a), sa=Math.sin(a);
-      V.push(x, CY+ca*r, CZ+sa*r);
-      const n=norm3([-dr,ca,sa]);
-      V.push(n[0],n[1],n[2]);
-    }
-  }
+  const I=[];
   for(let j=0;j<RINGS;j++)for(let s=0;s<SEG;s++){
     const a=j*(SEG+1)+s,b=a+SEG+1;
     I.push(a,b,a+1, a+1,b,b+1);
   }
-  var glassVB=device.createBuffer({size:V.length*4,usage:GPUBufferUsage.VERTEX|GPUBufferUsage.COPY_DST});
-  device.queue.writeBuffer(glassVB,0,new Float32Array(V));
-  var glassIB=device.createBuffer({size:I.length*4,usage:GPUBufferUsage.INDEX|GPUBufferUsage.COPY_DST});
+  glassIB=device.createBuffer({size:I.length*4,usage:GPUBufferUsage.INDEX|GPUBufferUsage.COPY_DST});
   device.queue.writeBuffer(glassIB,0,new Uint32Array(I));
-  var glassIdxN=I.length;
+  glassIdxN=I.length;
+}
+function buildGlass(){
+  const V=new Float32Array((RINGS+1)*(SEG+1)*6);
+  let o=0;
+  const h=MODE==='orifice'?.06:.4;               /* pas de dérivée : arête vive fidèle */
+  for(let j=0;j<=RINGS;j++){
+    const x=X0+(X1-X0)*j/RINGS;
+    const r=tubeR(x)+.4;
+    const rA=tubeR(Math.min(X1,x+h))+.4, rB=tubeR(Math.max(X0,x-h))+.4;
+    const dr=(rA-rB)/(2*h);
+    for(let s=0;s<=SEG;s++){
+      const a=s/SEG*Math.PI*2, ca=Math.cos(a), sa=Math.sin(a);
+      V[o++]=x;V[o++]=CY+ca*r;V[o++]=CZ+sa*r;
+      const n=norm3([-dr,ca,sa]);
+      V[o++]=n[0];V[o++]=n[1];V[o++]=n[2];
+    }
+  }
+  device.queue.writeBuffer(glassVB,0,V);
+}
+buildGlass();
+/* remise à zéro de l'écoulement selon le profil courant (NP constant) */
+function resetParticles(){
+  const list=[];
+  for(let x=X0+.8;x<X1-1.6;x+=SPACING){
+    const r=tubeR(x)-1.6;
+    if(r<.8)continue;
+    for(let y=CY-r;y<=CY+r;y+=SPACING)for(let z=CZ-r;z<=CZ+r;z+=SPACING){
+      const dy=y-CY,dz=z-CZ;
+      if(dy*dy+dz*dz<r*r)list.push([x,y,z]);
+    }
+  }
+  while(list.length<NP){
+    const p=list[(Math.random()*list.length)|0];
+    list.push([p[0]+(Math.random()-.5)*.4,p[1]+(Math.random()-.5)*.4,p[2]+(Math.random()-.5)*.4]);
+  }
+  const d=new Float32Array(NP*20);
+  for(let i=0;i<NP;i++){
+    d[i*20]=list[i][0]+(Math.random()-.5)*.14;
+    d[i*20+1]=list[i][1]+(Math.random()-.5)*.14;
+    d[i*20+2]=list[i][2]+(Math.random()-.5)*.14;
+  }
+  device.queue.writeBuffer(particleBuf,0,d);
 }
 /* anneaux lumineux : amont, col (vanne), aval — 24 segments chacun, halo+cœur */
 const RING_XS=[X0+.6,XC,X1-1];
@@ -731,7 +771,8 @@ function makePipelines(){
     constants:{...FP,stiffness:50,restDensity:3,dynamicViscosity:.15}}});
   pipes.upd=device.createComputePipeline({layout:auto,compute:{module:mod(UPDATE_WGSL),entryPoint:'updateGrid',constants:FP}});
   pipes.g2p=device.createComputePipeline({layout:auto,compute:{module:mod(G2P_WGSL),entryPoint:'g2p',
-    constants:{...FP,R0:R0,RT:RT,XC:XC,LT:LT,CY:CY,CZ:CZ,X0:X0,X1:X1}}});
+    constants:{...FP,R0:R0,RT:RT,XC:XC,LT:LT,CY:CY,CZ:CZ,X0:X0,X1:X1,
+      SHARP:MODE==='orifice'?1:0,PLATE:PLATE}}});
   pipes.stats=device.createComputePipeline({layout:auto,compute:{module:mod(STATS_WGSL),entryPoint:'stats',
     constants:{XC:XC,LT:LT}}});
   const depthMod=mod(DEPTH_WGSL);
@@ -984,7 +1025,16 @@ cv.addEventListener('touchmove',e=>{if(e.touches.length===2){
   const d=Math.hypot(e.touches[0].clientX-e.touches[1].clientX,e.touches[0].clientY-e.touches[1].clientY);
   distT=Math.max(6,Math.min(19,distT-(d-pinch0)*.02));pinch0=d;e.preventDefault()}},{passive:false});
 let pulse=0;
-const bA=document.getElementById('bA'),bZ=document.getElementById('bZ');
+const bA=document.getElementById('bA'),bZ=document.getElementById('bZ'),
+      bG=document.getElementById('bG');
+/* bascule d'appareil : venturi lisse ↔ diaphragme (vena contracta réelle) */
+bG.addEventListener('click',()=>{
+  MODE=MODE==='venturi'?'orifice':'venturi';
+  bG.textContent=MODE==='venturi'?'⭘ Diaphragme':'⌛ Venturi';
+  makePipelines();makeBindgroups();buildGlass();applyPalette();
+  resetParticles();MEAS.v1=0;MEAS.v2=0;
+  updCalc(+vSlider.value);
+});
 document.getElementById('bP').addEventListener('click',()=>pulse=1);
 bZ.addEventListener('click',()=>{PAUSED=!PAUSED;bZ.textContent=PAUSED?'▶ Reprendre':'⏸ Pause'});
 bA.addEventListener('click',()=>{autoRot=!autoRot;bA.textContent=autoRot?'⏹ Stop':'🌀 Auto'});
@@ -1008,20 +1058,25 @@ const A1=Math.PI*Math.pow(D1mm/2000,2);                   // m²
 const MEAS={v1:0,v2:0,pending:false};
 const vms=vGrid=>vGrid*CELL_M*(fps*SUBSTEPS*DT);          // cellules/u → m/s (cadence réelle)
 function updCalc(v){
+  const orif=MODE==='orifice';
+  const CdM=orif?0.61:Cd;                                 // orifice vif ≈ .61, venturi lisse ≈ .97
   const est1=v/100*2;                                     // estimation si mesure pas prête
   const v1=MEAS.v1>0?vms(MEAS.v1):est1;
   const v2m=MEAS.v2>0?vms(MEAS.v2):0;
-  const v2t=beta>0?v1/(beta*beta):0;                      // continuité
+  const v2t=beta>0?v1/(beta*beta):0;                      // continuité (au droit de l'ouverture)
   const err=v2m>0?((v2m-v2t)/v2t*100):null;
-  const dP=.5*RHO*(v2t*v2t-v1*v1)/1000;                   // kPa
-  const p2=P1-dP;
-  const sig=v2t>1e-3?(P1-PVAP)/(.5*RHO*v2t*v2t/1000):1e9; // nombre de cavitation
-  const cav=p2<PVAP;
+  const vvc=v2t/Cc, Dvc=D2mm*Math.sqrt(Cc);
+  /* vitesse de référence pour pression mini : au col (venturi) ou à la vena
+     contracta (diaphragme, plus sévère car v_vc = v₂/Cc) */
+  const vRef=orif?vvc:v2t;
+  const dP=.5*RHO*(v2t*v2t-v1*v1)/1000;                   // kPa (prises amont/col)
+  const pMin=P1-.5*RHO*(vRef*vRef-v1*v1)/1000;
+  const sig=vRef>1e-3?(P1-PVAP)/(.5*RHO*vRef*vRef/1000):1e9;
+  const cav=pMin<PVAP;
   const Q=v1*A1*3600;                                     // m³/h
   const Re1=v1*(D1mm/1000)/NU, Re2=v2t*(D2mm/1000)/NU;
-  const vvc=v2t/Cc, Dvc=D2mm*Math.sqrt(Cc);
-  const QisoLh=Cd*(Math.PI*Math.pow(D2mm/2000,2))*Math.sqrt(Math.max(0,2*dP*1000/(RHO*(1-Math.pow(beta,4)))))*3600;
-  calcEl.innerHTML=`<div class="t">Venturi · sim ↔ théorie</div>
+  const QisoLh=CdM*(Math.PI*Math.pow(D2mm/2000,2))*Math.sqrt(Math.max(0,2*dP*1000/(RHO*(1-Math.pow(beta,4)))))*3600;
+  calcEl.innerHTML=`<div class="t">${orif?'Diaphragme':'Venturi'} · sim ↔ théorie</div>
     D₁ / D₂ <b>${D1mm} / ${D2mm.toFixed(1)} mm</b><br>
     β = D₂/D₁ <b>${beta.toFixed(2)}</b><br>
     Rapport d'aires A₁/A₂ <b>${(1/(beta*beta)).toFixed(1)}</b><br>
@@ -1030,14 +1085,16 @@ function updCalc(v){
     v₂ théorie v₁/β² <b>${v2t.toFixed(2)} m/s</b><br>
     ${err!=null?`écart sim / théorie <b>${err>0?'+':''}${err.toFixed(0)} %</b><br>`:''}
     ΔP Bernoulli <b>${dP.toFixed(1)} kPa</b><br>
-    p₂ = p₁ − ΔP <b>${p2.toFixed(1)} kPa</b>${cav?' <b style="color:#EF3346">⚠ cavitation</b>':''}<br>
+    p mini (${orif?'vena contracta':'col'}) <b>${pMin.toFixed(1)} kPa</b>${cav?' <b style="color:#EF3346">⚠ cavitation</b>':''}<br>
     σ cavitation <b>${sig<100?sig.toFixed(2):'—'}</b><br>
     Débit Q = v₁A₁ <b>${Q.toFixed(1)} m³/h</b><br>
-    Q ISO 5167 (C𝑑 ${Cd}) <b>${QisoLh.toFixed(1)} m³/h</b><br>
-    Re₁ conduite <b>${(Re1/1000).toFixed(0)} k</b> — Re₂ col <b>${(Re2/1000).toFixed(0)} k</b><br>
-    Vena contracta (C𝑐 ${Cc}) :<br>
-    D𝑣𝑐 <b>${Dvc.toFixed(1)} mm</b><br>
-    v𝑣𝑐 = v₂/C𝑐 <b>${vvc.toFixed(2)} m/s</b>`;
+    Q ISO 5167 (C𝑑 ${CdM}) <b>${QisoLh.toFixed(1)} m³/h</b><br>
+    Re₁ conduite <b>${(Re1/1000).toFixed(0)} k</b><br>
+    Re₂ col <b>${(Re2/1000).toFixed(0)} k</b><br>
+    ${orif?`Vena contracta (C𝑐 ${Cc}) :<br>
+    D𝑣𝑐 = D₂√C𝑐 <b>${Dvc.toFixed(1)} mm</b><br>
+    v𝑣𝑐 = v₂/C𝑐 <b>${vvc.toFixed(2)} m/s</b>`
+    :`Vena contracta : <b>sans objet</b><br>(convergent lisse — le jet colle à la paroi)`}`;
   drawChart(v1);
 }
 /* ── Graphe p(x) / v(x) le long du profil (analytique, continuité+Bernoulli) ── */
