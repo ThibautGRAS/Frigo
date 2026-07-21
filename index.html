@@ -438,7 +438,7 @@ background:rgba(255,255,255,.82);border-radius:100px;box-shadow:0 4px 16px rgba(
 <script>
 /* Garde-fous : jamais d'écran noir muet */
 window.__bootOK=false;
-window.__APP_VERSION="v2.12";
+window.__APP_VERSION="v2.13";
 window.addEventListener("DOMContentLoaded",function(){
   var v=document.getElementById("loaderVer");
   if(v)v.textContent=window.__APP_VERSION;
@@ -1750,7 +1750,7 @@ function animate(){
     const e=root.matrixWorld.elements;                   /* demi-hauteur monde de la cavité tournée */
     LIQ.U.uHalfY.value=(LIQ_CB/2)*(Math.abs(e[1])+Math.abs(e[5])+Math.abs(e[9]));
     /* axe local Z du monolithe en monde : direction du glissement des tranches */
-    LIQ.zx=e[8]*.012;LIQ.zz=e[10]*.012;
+    LIQ.zx=e[8]*.008;LIQ.zz=e[10]*.008;   /* gain adouci : slosh d'arrivée plus mesuré */
     /* accélération du glissement de chaque tranche (extraction/retour) → le liquide
        ballotte avec la vitesse ; une tranche qui vient de loin secoue davantage */
     domainGroups.forEach(g=>{
@@ -1870,7 +1870,7 @@ function animate(){
         L.wv.x*=dm;L.wv.y*=dm;
         L.wob.x+=L.wv.x*dtS;L.wob.y+=L.wv.y*dtS;
         /* agitation splash : souris rapide ou arrivée de tranche, retombée ~1 s */
-        const at=Math.max(LIQ.agitT,Math.min(1,Math.abs(ga)*.02));
+        const at=Math.max(LIQ.agitT,Math.min(1,Math.abs(ga)*.014));
         L.agit=Math.max(L.agit*Math.exp(-1.9*dtS),at);
         /* cubes rouges : vie continue (agitation plancher qui respire) + surges
            doux et désynchronisés — plus de brutal on/off */
