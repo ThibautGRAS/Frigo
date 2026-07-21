@@ -839,6 +839,46 @@ const edgeVB=device.createBuffer({size:edgeData.byteLength,usage:GPUBufferUsage.
 const GLOW_N=2;
 const glowData=new Float32Array(GLOW_N*8);
 const glowVB=device.createBuffer({size:glowData.byteLength,usage:GPUBufferUsage.VERTEX|GPUBufferUsage.COPY_DST});
+/* ── Bulles de cavitation : naissent dans la zone p≈p_vap (vena contracta),
+      advectées par le jet, implosent quand la pression se rétablit ── */
+const BUB={list:[],max:190,data:new Float32Array(190*8)};
+const bubVB=device.createBuffer({size:BUB.data.byteLength,usage:GPUBufferUsage.VERTEX|GPUBufferUsage.COPY_DST});
+const CAV={sig:9,v1ms:0};                    /* alimenté par updCalc */
+function stepBubbles(){
+  const sev=Math.max(0,1.15-CAV.sig);        /* sévérité 0..~1 (σ<1.15 ⇒ bulles) */
+  const vc=CAV.v1ms>0?CAV.v1ms/CELL_M/Math.max(fps,20):0;   /* cellules/frame conduite */
+  if(sev>0&&vc>0){
+    const n=Math.min(2+sev*8,BUB.max-BUB.list.length);
+    for(let k=0;k<n;k++){
+      const a=Math.random()*6.2832,rr=Math.sqrt(Math.random())*RT*.62;
+      BUB.list.push({x:XC+PLATE+Math.random()*1.8,
+        y:CY+Math.cos(a)*rr,z:CZ+Math.sin(a)*rr,
+        r:.10+Math.random()*.16,life:1});
+    }
+  }
+  const rec=3.5+sev*9;                       /* longueur de récupération (implosion) */
+  for(let i=BUB.list.length-1;i>=0;i--){
+    const b=BUB.list[i];
+    const vx=vc*Math.pow(R0/tubeR(b.x),2);   /* advection : continuité locale */
+    b.x+=vx*(0.9+Math.random()*.2);
+    b.y+=(Math.random()-.5)*.22+.015;        /* diffusion turbulente + flottabilité */
+    b.z+=(Math.random()-.5)*.22;
+    /* confinement dans le jet qui s'évase */
+    const rj=Math.min(tubeR(b.x)-1.3,RT*.7+(b.x-XC)*.30);
+    const dy=b.y-CY,dz=b.z-CZ,dr=Math.hypot(dy,dz);
+    if(dr>rj){b.y=CY+dy/dr*rj;b.z=CZ+dz/dr*rj;}
+    /* implosion : la pression remonte en aval → collapse rapide */
+    if(b.x>XC+rec)b.life-=.16+Math.random()*.1;
+    else b.life-=.008;
+    if(b.life<=0||b.x>X1-2){BUB.list.splice(i,1);}
+  }
+  for(let i=0;i<BUB.list.length;i++){
+    const b=BUB.list[i],w=gridToWorld([b.x,b.y,b.z]);
+    const s=b.r*SCALE*(b.life<.3?b.life/.3:1)*6;
+    BUB.data.set([w[0],w[1],w[2],s, .95,.99,1, .5*Math.min(1,b.life*2)],i*8);
+  }
+  if(BUB.list.length)device.queue.writeBuffer(bubVB,0,BUB.data,0,BUB.list.length*8);
+}
 /* grille→monde : centrage sur le milieu du tube et son axe */
 function gridToWorld(p){return[(p[0]-(X0+X1)/2)*SCALE,(p[1]-CY)*SCALE,(p[2]-CZ)*SCALE]}
 
@@ -1189,6 +1229,7 @@ function updCalc(v){
     D𝑣𝑐 = D₂√C𝑐 <b>${Dvc.toFixed(1)} mm</b><br>
     v𝑣𝑐 = v₂/C𝑐 <b>${vvc.toFixed(2)} m/s</b>`
     :`Vena contracta : <b>sans objet</b><br>(convergent lisse — le jet colle à la paroi)`}`;
+  CAV.sig=sig;CAV.v1ms=v1;                   /* pilote les bulles de cavitation */
   drawChart(v1);
 }
 /* ── Graphe p(x) / v(x) le long du profil (analytique, continuité+Bernoulli) ── */
@@ -1281,6 +1322,7 @@ function frame(now){
     device.queue.writeBuffer(glowVB,0,glowData);
   }
   device.queue.writeBuffer(glassBuf,48,new Float32Array([now*.001]));
+  if(!PAUSED)stepBubbles();
   const enc=device.createCommandEncoder();
   const wgP=Math.ceil(NP/64),wgC=Math.ceil(CELLS/64);
   for(let s=0;s<(PAUSED?0:SUBSTEPS);s++){
@@ -1313,6 +1355,7 @@ function frame(now){
     p.setVertexBuffer(0,edgeVB);p.draw(6,EDGE_N);
     p.setPipeline(pipes.glow);p.setBindGroup(0,bgs.glow);
     p.setVertexBuffer(0,glowVB);p.draw(6,GLOW_N);
+    if(BUB.list.length){p.setVertexBuffer(0,bubVB);p.draw(6,BUB.list.length);}
     p.end();
   }
   {
