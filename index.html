@@ -436,7 +436,7 @@ background:rgba(255,255,255,.82);border-radius:100px;box-shadow:0 4px 16px rgba(
 <script>
 /* Garde-fous : jamais d'écran noir muet */
 window.__bootOK=false;
-window.__APP_VERSION="v2.9";
+window.__APP_VERSION="v2.10";
 window.addEventListener("DOMContentLoaded",function(){
   var v=document.getElementById("loaderVer");
   if(v)v.textContent=window.__APP_VERSION;
@@ -1202,14 +1202,14 @@ function setTargets(){
           red=ess?1:0;glow=ess?.55:.3;                 /* rouge CETIM franc, réservé aux essentielles */
           if(metaKey&&metaKey.dom===openDom){          /* fiche axe/levier contextuelle */
             if(metaOn){op=.85;em=.55;ed=1;sc=1.06;red=1;glow=.5;}
-            else{op=.14;em=.3;ed=.25;info=.3;red*=0.4;glow*=0.2;}
+            else{op=.14;em=.3;ed=.25;info=.3;glow*=0.2;}   /* teinte conservée : pas de violet */
           }else if(cardKey){
             const isSel=m.userData.key===cardKey;
             const isLinked=CELLS[cardKey].links.includes(m.userData.key);
             /* sélection : dense et frans dans SA couleur (rouge si essentielle, bleu sinon) */
             if(isSel){op=.98;em=.7;sc=1.12;ed=1;red=ess?1:0;dense=1;info=1;glow=.7;}
-            else if(isLinked){op=.72;em=.5;ed=1;red=ess?.5:0;glow=.35;}
-            else{op=.16;em=.35;ed=.32;info=.35;red*=0.3;glow*=0.15;}
+            else if(isLinked){op=.72;em=.5;ed=1;red=ess?1:0;glow=.35;}
+            else{op=.16;em=.35;ed=.32;info=.35;glow*=0.15;} /* teinte conservée : pas de violet */
           }
         }
       }else{
