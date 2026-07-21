@@ -167,10 +167,13 @@ button{font-family:inherit;color:inherit}
 .cardp.show{transform:none}
 @media(max-width:760px){
   .cardp{
-    top:auto;left:0;width:100%;max-height:72vh;border-left:none;border-top:1px solid var(--line);
+    top:auto;left:0;width:100%;max-height:46vh;border-left:none;border-top:1px solid var(--line);
     border-radius:22px 22px 0 0;transform:translateY(105%);
+    box-shadow:0 -12px 40px rgba(11,31,78,.18);
   }
   .cardp.show{transform:none}
+  /* fiche ouverte : le rail s'efface pour laisser le cube visible au-dessus du tiroir */
+  body.cardopen .rail{opacity:0;pointer-events:none;transition:opacity .3s}
 }
 .cardp .chead{
   padding:20px 22px 14px;border-bottom:1px solid var(--line);flex-shrink:0;
@@ -438,7 +441,7 @@ background:rgba(255,255,255,.82);border-radius:100px;box-shadow:0 4px 16px rgba(
 <script>
 /* Garde-fous : jamais d'écran noir muet */
 window.__bootOK=false;
-window.__APP_VERSION="v2.13";
+window.__APP_VERSION="v2.14";
 window.addEventListener("DOMContentLoaded",function(){
   var v=document.getElementById("loaderVer");
   if(v)v.textContent=window.__APP_VERSION;
@@ -668,6 +671,7 @@ const CTY=0.5;                  /* cible caméra rehaussée : le cube s'affiche 
                                    les noms d'axes au-dessus restent bien dégagés */
 const camTgt={x:0,y:CTY,z:0};
 let panelShift=0;               /* décalage horizontal scène quand panneau ouvert (PC) */
+let panelShiftY=0;              /* décalage vertical scène quand tiroir bas ouvert (téléphone) */
 const CAM={min:10,max:30,home:17};
 
 /* ---- Tweens ---- */
@@ -1312,7 +1316,7 @@ function openSlice(di,cb){
   hint.style.opacity=0;
   /* dans tous les cas (rail, étiquette 3D, cube, deep-link) : la fiche du domaine
      s'affiche à droite — sauf si on vient ouvrir une brique précise (cb) */
-  if(!cb)fillDomCard(di);
+  if(!cb&&innerWidth>760)fillDomCard(di);   /* petit écran : la vue reste dégagée */
   syncRail();setTargets();
 }
 function closeSliceNow(){
@@ -1335,6 +1339,10 @@ document.getElementById("dpClose").addEventListener("click",closeSliceNow);
 
 /* ---- Fiche cellule ---- */
 const card=document.getElementById("card");
+/* classe miroir sur <body> : le CSS mobile masque le rail quand une fiche est ouverte */
+new MutationObserver(()=>{
+  document.body.classList.toggle("cardopen",card.classList.contains("show"));
+}).observe(card,{attributes:true,attributeFilter:["class"]});
 const trlbarEl=document.querySelector(".trlbar");
 trlbarEl.style.display="none";   /* TRL non renseigné pour l'instant (futur JSON) */
 function openCard(key){
@@ -2007,8 +2015,13 @@ function animate(){
   const shiftWorld=(panelW/innerWidth)*camDist*Math.tan(THREE.MathUtils.degToRad(camera.fov/2))*camera.aspect*0.34;
   const wantShift=(panelOpen&&wide)?shiftWorld:0;
   panelShift+=(wantShift-panelShift)*Math.min(1,dt*1.4);
-  camera.position.set(camTgt.x*.6+panelShift,camY+camTgt.y,camDist);
-  camera.lookAt(camTgt.x+panelShift,camTgt.y,camTgt.z);
+  /* téléphone (portrait) : la fiche est un tiroir bas → on remonte le cube
+     dans la moitié visible de l'écran */
+  const shiftYWorld=.46*camDist*Math.tan(THREE.MathUtils.degToRad(camera.fov/2))*.9;
+  const wantShiftY=(panelOpen&&!wide)?-shiftYWorld:0;
+  panelShiftY+=(wantShiftY-panelShiftY)*Math.min(1,dt*1.4);
+  camera.position.set(camTgt.x*.6+panelShift,camY+camTgt.y+panelShiftY,camDist);
+  camera.lookAt(camTgt.x+panelShift,camTgt.y+panelShiftY,camTgt.z);
   composer?composer.render():renderer.render(scene,camera);
 }
 
