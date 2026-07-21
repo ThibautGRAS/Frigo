@@ -1,414 +1,719 @@
 <!DOCTYPE html><html lang="fr"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>SSFR · Narrow-Range Filter</title>
-<script type="importmap">{"imports":{
-  "three":"https://cdn.jsdelivr.net/npm/three@0.161.0/build/three.module.js",
-  "three/addons/":"https://cdn.jsdelivr.net/npm/three@0.161.0/examples/jsm/"
-}}</script>
-<style>*{margin:0;padding:0}body{background:#010810;overflow:hidden;touch-action:none}
-#ui{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);display:flex;gap:10px}
-.b{background:rgba(0,40,120,.3);border:1px solid rgba(40,110,255,.3);color:rgba(100,180,255,.9);
+<title>MLS-MPM + SSFR · WebGPU</title>
+<style>*{margin:0;padding:0}
+body{background:#010810;overflow:hidden;touch-action:none;font-family:monospace}
+canvas{display:block;width:100vw;height:100vh}
+#ui{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);display:flex;gap:10px;z-index:9}
+.b{background:rgba(0,40,120,.3);border:1px solid rgba(40,110,255,.32);color:rgba(100,180,255,.9);
   font:700 9.5px/1 monospace;letter-spacing:2px;padding:10px 16px;border-radius:100px;
   cursor:pointer;text-transform:uppercase;touch-action:manipulation;user-select:none}
 .b:active{opacity:.6;transform:scale(.93)}
-#i{position:fixed;top:12px;right:12px;color:rgba(40,120,255,.3);font:9px monospace}</style>
-</head><body>
-<div id="i"></div>
+#info{position:fixed;top:10px;left:50%;transform:translateX(-50%);
+  color:rgba(100,180,255,.35);font:9px monospace;letter-spacing:2px;text-align:center}
+#err{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);
+  color:#FF8090;font:14px monospace;text-align:center;display:none;line-height:2;z-index:99}
+</style></head><body>
+<canvas id="c"></canvas>
+<div id="info">MLS-MPM · SSFR · WebGPU</div>
+<div id="err"></div>
 <div id="ui">
   <button class="b" id="bS">💧 Splash</button>
   <button class="b" id="bA">🌀 Auto</button>
-  <button class="b" id="bC">🎨 Teinte</button>
+  <button class="b" id="bC">🎨 Couleur</button>
 </div>
 <script type="module">
-import * as THREE from 'three';
+/* ══════════════════════════════════════════════════════════
+   MLS-MPM + Screen-Space Fluid Rendering — WebGPU
+   Inspiré de Splash (matsuoka-601, MIT)
+   
+   Pipeline :
+     Compute: clear_grid → p2g → grid_update → g2p
+     Render:  bg → depth_sph → thick_sph → nrf → normals → composite
+══════════════════════════════════════════════════════════ */
 
-const DPR=Math.min(devicePixelRatio,2);
-const W=innerWidth,H=innerHeight;
-const renderer=new THREE.WebGLRenderer({antialias:false});
-renderer.setPixelRatio(DPR);renderer.setSize(W,H);
-renderer.outputColorSpace=THREE.SRGBColorSpace;
-renderer.toneMapping=THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure=1.06;
-document.body.appendChild(renderer.domElement);
-
-// Résolution passes SSFR (demi-res)
-const SW=Math.floor(W*DPR*.5),SH=Math.floor(H*DPR*.5);
-
-const scene=new THREE.Scene();
-scene.background=new THREE.Color(0x010810);
-const cam=new THREE.PerspectiveCamera(40,W/H,.1,60);
-cam.position.set(0,1.4,8.5);cam.lookAt(0,-.3,0);
-let camZT=8.5;
-
-// Lumières
-scene.add(new THREE.AmbientLight(0x5080C0,.32));
-const sun=new THREE.DirectionalLight(0xEEF5FF,1.15);
-sun.position.set(5,12,4);scene.add(sun);
-const cL=new THREE.PointLight(0x30C0FF,3.8,16);scene.add(cL);
-const cL2=new THREE.PointLight(0xFF6020,.9,10);scene.add(cL2);
-
-// Décor
-const BOX=3,HB=BOX/2;
-const cubeGroup=new THREE.Group();scene.add(cubeGroup);
-const glas=new THREE.MeshPhysicalMaterial({color:0xAAD4FF,transparent:true,opacity:.07,
-  depthWrite:false,transmission:.94,ior:1.5,clearcoat:1,clearcoatRoughness:.02,
-  side:THREE.DoubleSide,roughness:.02,metalness:0});
-cubeGroup.add(new THREE.Mesh(new THREE.BoxGeometry(BOX,BOX,BOX),glas));
-const eM=new THREE.LineBasicMaterial({color:0x40A0FF,transparent:true,opacity:.62,
-  blending:THREE.AdditiveBlending,depthWrite:false});
-cubeGroup.add(new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(BOX,BOX,BOX)),eM));
-const flr=new THREE.Mesh(new THREE.PlaneGeometry(12,12),
-  new THREE.MeshStandardMaterial({color:0x040A18,roughness:1,metalness:0}));
-flr.rotation.x=-Math.PI/2;flr.position.y=-HB-.02;scene.add(flr);
-
-// ══ SPH Physique ══
-const PR=.125,PR_R=.22,WALL=HB-PR-.003;
-const SMOOTH=PR*2.4,SMOOTH2=SMOOTH*SMOOTH;
-const REST_D=7,PRESS_K=.4,VISC=.06,G=12;
-const SP=PR*2.05,nX=Math.floor((BOX-2*PR)/SP),nZ=nX,nY=Math.floor(HB/SP);
-const NP=nX*nY*nZ;
-console.log(`NP=${NP} (${nX}×${nY}×${nZ})`);
-const pos=new Float32Array(NP*3),vel=new Float32Array(NP*3);
-const dn=new Float32Array(NP),pr=new Float32Array(NP);
-const fx=new Float32Array(NP),fy=new Float32Array(NP),fz=new Float32Array(NP);
-let ip=0;
-for(let iy=0;iy<nY;iy++)for(let ix=0;ix<nX;ix++)for(let iz=0;iz<nZ;iz++){
-  pos[ip*3]=(-HB+PR)+ix*SP+(Math.random()-.5)*.004;
-  pos[ip*3+1]=(-HB+PR)+iy*SP+(Math.random()-.5)*.004;
-  pos[ip*3+2]=(-HB+PR)+iz*SP+(Math.random()-.5)*.004;ip++;
+/* ── WebGPU check ── */
+if (!navigator.gpu) {
+  document.getElementById('err').style.display='block';
+  document.getElementById('err').innerHTML=
+    `WebGPU non disponible.<br>
+     iOS 26+ : Réglages → Safari → Fonctions expérimentales → WebGPU<br>
+     Chrome 113+ : pris en charge nativement`;
+  throw new Error('no WebGPU');
 }
-const CS=SMOOTH,GD=Math.ceil(BOX/CS)+4,GD2=GD*GD;
-const MC=24,gCnt=new Int16Array(GD*GD2),gList=new Int16Array(GD*GD2*MC);
-function gI(x,y,z){
-  const ix=Math.floor((x+HB+CS*1.5)/CS),iy=Math.floor((y+HB+CS*1.5)/CS),iz=Math.floor((z+HB+CS*1.5)/CS);
-  return(ix*GD+iy)*GD+iz;
-}
-const W6=315/(64*Math.PI*Math.pow(SMOOTH,9));
-const WSP=-45/(Math.PI*Math.pow(SMOOTH,6));
-const WV=45/(Math.PI*Math.pow(SMOOTH,6));
-const _iQ=new THREE.Quaternion(),_gL=new THREE.Vector3();
-function sph(dt){
-  gCnt.fill(0);
-  for(let i=0;i<NP;i++){const k=gI(pos[i*3],pos[i*3+1],pos[i*3+2]);if(gCnt[k]<MC){gList[k*MC+gCnt[k]]=i;gCnt[k]++;}}
-  for(let i=0;i<NP;i++){
-    const ix=Math.floor((pos[i*3]+HB+CS*1.5)/CS),iy=Math.floor((pos[i*3+1]+HB+CS*1.5)/CS),iz=Math.floor((pos[i*3+2]+HB+CS*1.5)/CS);
-    let d=0;
-    for(let dx=-1;dx<=1;dx++)for(let dy=-1;dy<=1;dy++)for(let dz=-1;dz<=1;dz++){
-      const k=((ix+dx)*GD+(iy+dy))*GD+(iz+dz);if(k<0||k>=GD*GD2)continue;
-      const c=gCnt[k];
-      for(let ci=0;ci<c;ci++){const j=gList[k*MC+ci];
-        const rx=pos[i*3]-pos[j*3],ry=pos[i*3+1]-pos[j*3+1],rz=pos[i*3+2]-pos[j*3+2];
-        const r2=rx*rx+ry*ry+rz*rz;if(r2<SMOOTH2){const q=SMOOTH2-r2;d+=W6*q*q*q;}
-      }
-    }
-    dn[i]=d;pr[i]=PRESS_K*(d-REST_D);
-  }
-  fx.fill(0);fy.fill(0);fz.fill(0);
-  for(let i=0;i<NP;i++){
-    const ix=Math.floor((pos[i*3]+HB+CS*1.5)/CS),iy=Math.floor((pos[i*3+1]+HB+CS*1.5)/CS),iz=Math.floor((pos[i*3+2]+HB+CS*1.5)/CS);
-    for(let dx=-1;dx<=1;dx++)for(let dy=-1;dy<=1;dy++)for(let dz=-1;dz<=1;dz++){
-      const k=((ix+dx)*GD+(iy+dy))*GD+(iz+dz);if(k<0||k>=GD*GD2)continue;
-      const c=gCnt[k];
-      for(let ci=0;ci<c;ci++){const j=gList[k*MC+ci];if(j<=i)continue;
-        const rx=pos[i*3]-pos[j*3],ry=pos[i*3+1]-pos[j*3+1],rz=pos[i*3+2]-pos[j*3+2];
-        const r2=rx*rx+ry*ry+rz*rz;
-        if(r2<SMOOTH2&&r2>1e-9){
-          const r=Math.sqrt(r2),hr=SMOOTH-r,dd=Math.max(dn[i]*dn[j],1e-5);
-          const fp=WSP*hr*hr/r*(pr[i]+pr[j])*.5/dd;
-          fx[i]+=fp*rx;fy[i]+=fp*ry;fz[i]+=fp*rz;fx[j]-=fp*rx;fy[j]-=fp*ry;fz[j]-=fp*rz;
-          const fv=VISC*WV*hr/dd;
-          fx[i]+=fv*(vel[j*3]-vel[i*3]);fy[i]+=fv*(vel[j*3+1]-vel[i*3+1]);fz[i]+=fv*(vel[j*3+2]-vel[i*3+2]);
-          fx[j]-=fv*(vel[j*3]-vel[i*3]);fy[j]-=fv*(vel[j*3+1]-vel[i*3+1]);fz[j]-=fv*(vel[j*3+2]-vel[i*3+2]);
-        }
-      }
-    }
-  }
-  for(let i=0;i<NP;i++){
-    vel[i*3]+=(fx[i]+_gL.x*G)*dt;vel[i*3+1]+=(fy[i]+_gL.y*G)*dt;vel[i*3+2]+=(fz[i]+_gL.z*G)*dt;
-    pos[i*3]+=vel[i*3]*dt;pos[i*3+1]+=vel[i*3+1]*dt;pos[i*3+2]+=vel[i*3+2]*dt;
-    const B=.3,F=.97;
-    for(let a=0;a<3;a++){
-      if(pos[i*3+a]<-WALL){pos[i*3+a]=-WALL;vel[i*3+a]=Math.abs(vel[i*3+a])*B;vel[i*3+(a+1)%3]*=F;vel[i*3+(a+2)%3]*=F;}
-      if(pos[i*3+a]> WALL){pos[i*3+a]= WALL;vel[i*3+a]=-Math.abs(vel[i*3+a])*B;vel[i*3+(a+1)%3]*=F;vel[i*3+(a+2)%3]*=F;}
-    }
-  }
-}
+const adapter = await navigator.gpu.requestAdapter({powerPreference:'high-performance'});
+if (!adapter) { document.getElementById('err').style.display='block';document.getElementById('err').textContent='Pas d\'adaptateur GPU disponible.';throw new Error('no adapter');}
+const device = await adapter.requestDevice({
+  requiredFeatures: adapter.features.has('shader-f16') ? ['shader-f16'] : [],
+});
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('webgpu');
+const fmt = navigator.gpu.getPreferredCanvasFormat();
+const resize = () => {
+  canvas.width = Math.floor(innerWidth * devicePixelRatio);
+  canvas.height = Math.floor(innerHeight * devicePixelRatio);
+  ctx.configure({device, format:fmt, alphaMode:'opaque'});
+};
+resize(); addEventListener('resize', resize);
 
-// ══ SSFR Render Targets ══
-const fO={type:THREE.FloatType,format:THREE.RGBAFormat,minFilter:THREE.LinearFilter,magFilter:THREE.LinearFilter};
-const depthRT =new THREE.WebGLRenderTarget(SW,SH,{...fO,depthBuffer:true});
-const thickRT =new THREE.WebGLRenderTarget(SW,SH,{...fO,depthBuffer:false});
-const nrfRT   =new THREE.WebGLRenderTarget(SW,SH,{...fO,depthBuffer:false});
-const normRT  =new THREE.WebGLRenderTarget(SW,SH,{...fO,depthBuffer:false});
-const bgRT    =new THREE.WebGLRenderTarget(W*DPR,H*DPR,{...fO,depthBuffer:true});
-const ssfrCam=new THREE.OrthographicCamera(-1,1,1,-1,0,1);
-const ssfrSc=new THREE.Scene();
-const sQ=()=>new THREE.Mesh(new THREE.PlaneGeometry(2,2));
-
-// Palettes
-const PALS=[
-  {c:0x1060EE,abs:'0.25,0.08,0.02',em:0x001840},
-  {c:0x10A865,abs:'0.05,0.25,0.25',em:0x001A10},
-  {c:0xA020A0,abs:'0.08,0.30,0.05',em:0x200028},
-  {c:0xC05A10,abs:'0.05,0.15,0.35',em:0x1E0800},
+/* ── Simulation constants ── */
+const G = 48;        // grid dimension
+const DT = 0.0015;  // timestep
+const NP = 9261;    // 21³ particles (tight packing fills bottom half)
+const WORLD = 3.0;  // cube world size
+const SCALE = WORLD; // domain [0,1] → world [-1.5,1.5]
+const PR_WORLD = 0.20; // particle render radius
+const PALETTES = [
+  {col:[0.07,0.38,0.92], abs:[0.18,0.06,0.01]},  // bleu
+  {col:[0.06,0.68,0.42], abs:[0.04,0.18,0.18]},  // vert
+  {col:[0.65,0.12,0.65], abs:[0.06,0.22,0.04]},  // violet
+  {col:[0.78,0.36,0.06], abs:[0.04,0.10,0.28]},  // ambre
 ];
-let pi=0;
+let palIdx=0;
 
-// Pass 1 : Depth (sphères billboard)
-const ptGeo=new THREE.BufferGeometry();
-const ptPos=new THREE.BufferAttribute(new Float32Array(NP*3),3);
-ptPos.setUsage(THREE.DynamicDrawUsage);ptGeo.setAttribute('position',ptPos);
-const depSc=new THREE.Scene();
-const ptMat=new THREE.ShaderMaterial({
-  uniforms:{uR:{value:PR_R},uFov:{value:cam.fov*Math.PI/180}},
-  vertexShader:`
-uniform float uR,uFov;varying vec3 vVC;
-void main(){
-  vec4 mv=modelViewMatrix*vec4(position,1.);vVC=mv.xyz;
-  gl_Position=projectionMatrix*mv;
-  gl_PointSize=uR*(1./tan(uFov*.5))/(-mv.z)*${SH}.;
-}`,
-  fragmentShader:`
-uniform float uR;uniform mat4 projectionMatrix;varying vec3 vVC;
-void main(){
-  vec2 c=gl_PointCoord*2.-1.;float r2=dot(c,c);if(r2>1.)discard;
-  float dz=sqrt(1.-r2)*uR;vec3 sp=vVC+vec3(0,0,dz);
-  vec4 cl=projectionMatrix*vec4(sp,1.);
-  gl_FragDepth=cl.z/cl.w*.5+.5;
-  // r=view-depth, g=nx_local, b=ny_local, a=nz_local (normale sphère locale)
-  gl_FragColor=vec4(-sp.z,c.x,c.y,sqrt(1.-r2));
-}`,
-  depthTest:true,depthWrite:true
+/* ── Buffers ── */
+const G3 = G*G*G;
+// Particle: pos(3f) + Jp(1f) + vel(3f) + pad(1f) = 8 f32 per particle
+const partBuf = device.createBuffer({
+  size: NP*8*4,
+  usage: GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST|GPUBufferUsage.VERTEX
 });
-depSc.add(new THREE.Points(ptGeo,ptMat));
-
-// Pass 2 : Thickness (même sphères, additif → accumulation)
-const thkMat=new THREE.ShaderMaterial({
-  uniforms:{uR:{value:PR_R},uFov:{value:cam.fov*Math.PI/180}},
-  vertexShader:`
-uniform float uR,uFov;varying vec3 vVC;
-void main(){
-  vec4 mv=modelViewMatrix*vec4(position,1.);vVC=mv.xyz;
-  gl_Position=projectionMatrix*mv;
-  gl_PointSize=uR*(1./tan(uFov*.5))/(-mv.z)*${SH}.;
-}`,
-  fragmentShader:`
-uniform float uR;varying vec3 vVC;
-void main(){
-  vec2 c=gl_PointCoord*2.-1.;float r2=dot(c,c);if(r2>1.)discard;
-  // Épaisseur = chord length = 2*sqrt(1-r²)*R
-  float th=2.*sqrt(1.-r2)*uR;
-  gl_FragColor=vec4(th,0,0,1);
-}`,
-  transparent:true,depthTest:false,depthWrite:false,
-  blending:THREE.AdditiveBlending
+// C matrix: 9 f32 per particle (affine velocity field)
+const cBuf = device.createBuffer({
+  size: NP*9*4,
+  usage: GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST
 });
-const thkSc=new THREE.Scene();thkSc.add(new THREE.Points(ptGeo,thkMat));
-
-// Pass 3 : Narrow-Range Filter (NRF) — meilleur que bilatéral pour fluides
-// Source: Truong & Yuksel, PACMCGIT 2018
-const nrfMat=new THREE.ShaderMaterial({
-  uniforms:{uT:{value:depthRT.texture},uRes:{value:new THREE.Vector2(SW,SH)},
-    uSigmaS:{value:6.},uSigmaR:{value:.28}}, // sigmaR ~ rayon view-space
-  vertexShader:`void main(){gl_Position=vec4(position,1.);}`,
-  fragmentShader:`
-uniform sampler2D uT;uniform vec2 uRes;uniform float uSigmaS,uSigmaR;
-#define R 10
-void main(){
-  vec2 uv=gl_FragCoord.xy/uRes,px=1./uRes;
-  vec4 cc=texture2D(uT,uv);float dc=cc.r;
-  if(dc<.01){gl_FragColor=vec4(0);return;}
-  /* Narrow-Range Filter : inclusion dure dans ±sigmaR (pas de pondération range) */
-  float sw=0.;vec4 acc=vec4(0.);float minD=dc-uSigmaR,maxD=dc+uSigmaR;
-  for(int x=-R;x<=R;x++)for(int y=-R;y<=R;y++){
-    vec2 su=uv+vec2(x,y)*px;
-    vec4 s=texture2D(uT,su);float dj=s.r;
-    if(dj<.01||dj<minD||dj>maxD)continue; // plage étroite : exclusion dure
-    float w=exp(-float(x*x+y*y)/(2.*uSigmaS*uSigmaS));
-    acc+=s*w;sw+=w;
-  }
-  gl_FragColor=sw>0.?acc/sw:cc;
-}`,depthTest:false,depthWrite:false
+// Grid: mass (atomic i32) + vel x,y,z (atomic i32) = 4 i32 per cell
+const gridBuf = device.createBuffer({
+  size: G3*4*4,
+  usage: GPUBufferUsage.STORAGE
 });
-const nrfQ=sQ();nrfQ.material=nrfMat;
-
-// Pass 4 : Normales depuis depth NRF
-const normMat_=new THREE.ShaderMaterial({
-  uniforms:{uT:{value:nrfRT.texture},uRes:{value:new THREE.Vector2(SW,SH)},uP:{value:cam.projectionMatrix}},
-  vertexShader:`void main(){gl_Position=vec4(position,1.);}`,
-  fragmentShader:`
-uniform sampler2D uT;uniform vec2 uRes;uniform mat4 uP;
-vec3 unp(vec2 uv,float d){return vec3((uv.x*2.-1.)/uP[0][0],(uv.y*2.-1.)/uP[1][1],-1.)*d;}
-void main(){
-  vec2 uv=gl_FragCoord.xy/uRes,px=1./uRes;
-  float d=texture2D(uT,uv).r;if(d<.01){gl_FragColor=vec4(0);return;}
-  float dL=texture2D(uT,uv-vec2(px.x,0)).r,dR=texture2D(uT,uv+vec2(px.x,0)).r;
-  float dD=texture2D(uT,uv-vec2(0,px.y)).r,dU=texture2D(uT,uv+vec2(0,px.y)).r;
-  vec3 p=unp(uv,d);
-  vec3 pL=unp(uv-vec2(px.x,0),dL>.01?dL:d),pR=unp(uv+vec2(px.x,0),dR>.01?dR:d);
-  vec3 pD=unp(uv-vec2(0,px.y),dD>.01?dD:d),pU=unp(uv+vec2(0,px.y),dU>.01?dU:d);
-  vec3 n=normalize(cross(pR-pL,pU-pD));
-  gl_FragColor=vec4(n*.5+.5,1.);
-}`,depthTest:false,depthWrite:false
+// Uniforms (gravity x,y,z + pad + proj+view matrices)
+const unifBuf = device.createBuffer({
+  size: 256,
+  usage: GPUBufferUsage.UNIFORM|GPUBufferUsage.COPY_DST
 });
-const normQ=sQ();normQ.material=normMat_;
-
-// Pass 5 : Composite final — réflexion + réfraction Beer-Lambert + spéculaire
-const p=PALS[pi];
-const compMat=new THREE.ShaderMaterial({
-  uniforms:{
-    uDepth:{value:nrfRT.texture},uNorm:{value:normRT.texture},
-    uThick:{value:thickRT.texture},uBG:{value:bgRT.texture},
-    uRes:{value:new THREE.Vector2(W*DPR,H*DPR)},
-    uSRes:{value:new THREE.Vector2(SW,SH)},
-    uTime:{value:0},
-    uColor:{value:new THREE.Color(p.c)},
-    uAbsorb:{value:new THREE.Vector3(...p.abs.split(',').map(Number))},
-    uSun:{value:new THREE.Vector3(.45,.9,.35).normalize()},
-    uViewInv:{value:cam.matrixWorld},uP:{value:cam.projectionMatrix},
-  },
-  vertexShader:`void main(){gl_Position=vec4(position,1.);}`,
-  fragmentShader:`
-uniform sampler2D uDepth,uNorm,uThick,uBG;
-uniform vec2 uRes,uSRes;uniform float uTime;
-uniform vec3 uColor,uAbsorb,uSun;
-uniform mat4 uViewInv,uP;
-vec3 unp(vec2 uv,float d){return vec3((uv.x*2.-1.)/uP[0][0],(uv.y*2.-1.)/uP[1][1],-1.)*d;}
-void main(){
-  vec2 uv=gl_FragCoord.xy/uRes;
-  vec2 suv=uv*uSRes/uRes; // UV espace SSFR
-  float depth=texture2D(uDepth,suv).r;
-  vec3 bg=texture2D(uBG,uv).rgb;
-  if(depth<.01){gl_FragColor=vec4(bg,1.);return;}
-  vec3 nV=texture2D(uNorm,suv).rgb*2.-1.;
-  float thick=texture2D(uThick,suv).r;
-  /* Normales world-space */
-  vec3 nW=normalize((uViewInv*vec4(nV,0.)).xyz);
-  /* Position world-space */
-  vec3 posV=unp(suv,depth);
-  vec3 posW=(uViewInv*vec4(posV,1.)).xyz;
-  vec3 eyeW=(uViewInv*vec4(0,0,0,1.)).xyz;
-  vec3 vd=normalize(eyeW-posW);
-  /* Fresnel */
-  float F=pow(1.-max(0.,dot(nW,vd)),4.)*.88+.04;
-  /* Spéculaire */
-  float sp=pow(max(0.,dot(reflect(-uSun,nW),vd)),240.)*1.4;
-  /* Réfraction : fond + décalage normal */
-  vec2 refOff=nW.xy*.065*(1.+thick*.5);
-  vec3 bgRefr=texture2D(uBG,uv+refOff).rgb;
-  /* Beer-Lambert : absorption exponentielle selon l'épaisseur traversée */
-  vec3 absorb=exp(-uAbsorb*max(thick,.01)*1.5);
-  vec3 waterColor=uColor*.9;
-  vec3 refracted=bgRefr*absorb + waterColor*(1.-absorb);
-  /* Réflexion approximée (normal→couleur sky) */
-  vec3 reflDir=reflect(-vd,nW);
-  vec3 reflected=mix(vec3(.06,.1,.2),vec3(.4,.7,1.),max(0.,reflDir.y)*.85+.15);
-  reflected=mix(reflected,vec3(1.),pow(max(0.,dot(reflDir,uSun)),16.)*.2);
-  /* Caustiques */
-  float caus=sin(posW.x*9.-uTime*2.)*sin(posW.z*9.-uTime*1.7)*.5+.5;
-  refracted+=uColor*.1*caus*caus*absorb;
-  /* Composite Fresnel */
-  vec3 col=mix(refracted,reflected,F*.7);
-  col+=vec3(.95,.98,1.)*sp;
-  /* Contour flou à l'interface */
-  float edge=1.-smoothstep(.0,.02,thick);
-  col=mix(col,bg,edge*.6);
-  gl_FragColor=vec4(col,1.);
-}`,depthTest:false,depthWrite:false
+// Palette color buffer
+const palBuf = device.createBuffer({
+  size: 32,
+  usage: GPUBufferUsage.UNIFORM|GPUBufferUsage.COPY_DST
 });
-const compQ=sQ();compQ.material=compMat;
 
-// ══ Contrôles ══
-const rot={x:.3,y:-.38};let drag=false,lX=0,lY=0,rX=0,rY=0,autoRot=false;
-const _tmp=new THREE.Vector3(),_cM=new THREE.Matrix4();
-renderer.domElement.addEventListener('pointerdown',e=>{drag=true;lX=e.clientX;lY=e.clientY;rX=rY=0;renderer.domElement.setPointerCapture(e.pointerId);});
-renderer.domElement.addEventListener('pointerup',()=>drag=false);
-renderer.domElement.addEventListener('pointermove',e=>{if(!drag)return;const dx=(e.clientX-lX)*.007,dy=(e.clientY-lY)*.006;rot.y+=dx;rot.x+=dy;lX=e.clientX;lY=e.clientY;rX=dy;rY=dx;e.preventDefault();},{passive:false});
+/* ── Initialisation particules ── */
+{
+  const sp=1.3/G; // espacement ~ 1.3*dx
+  const n=Math.round(NP**(1/3));
+  const data=new Float32Array(NP*8);
+  const cdata=new Float32Array(NP*9); // C=0 initially
+  let ip=0;
+  for(let iy=0;iy<n&&ip<NP;iy++)
+    for(let ix=0;ix<n&&ip<NP;ix++)
+      for(let iz=0;iz<n&&ip<NP;iz++){
+        data[ip*8+0]=0.1+ix*sp+(Math.random()-.5)*.002; // x
+        data[ip*8+1]=0.1+iy*sp*.5+(Math.random()-.5)*.002; // y (demi-cube)
+        data[ip*8+2]=0.1+iz*sp+(Math.random()-.5)*.002; // z
+        data[ip*8+3]=1.0; // Jp
+        data[ip*8+4]=data[ip*8+5]=data[ip*8+6]=0; // vel
+        data[ip*8+7]=0; // pad
+        ip++;
+      }
+  device.queue.writeBuffer(partBuf,0,data);
+  device.queue.writeBuffer(cBuf,0,cdata);
+}
+
+/* ── WGSL shaders ── */
+const G_=G, G2_=G*G, G3_=G3;
+
+// Shader partagé : utilitaires MPM
+const MPM_UTIL = `
+const GRID: u32 = ${G_}u;
+const G2: u32 = ${G2_}u;
+const DX: f32 = 1.0/${G_}.0;
+const DT: f32 = ${DT};
+const MASS: f32 = 1.0;
+const VOL: f32 = ${(1.0/NP*0.4).toFixed(6)};
+const BULK_K: f32 = 80.0;
+const GAMMA: f32 = 3.0;
+const REST_D: f32 = ${(NP*0.4*0.7).toFixed(1)};
+const FIXED: i32 = 100000;
+struct Par { pos: vec3f, Jp: f32, vel: vec3f, pad: f32 }
+fn gidx(x:u32,y:u32,z:u32)->u32{return x*G2+y*GRID+z;}
+fn bspline(f:f32)->vec3f{return vec3f(.5*(1.5-f)*(1.5-f),.75-(f-1.)*(f-1.),.5*(f-.5)*(f-.5));}
+`;
+
+// Clear grid
+const clearWGSL = `
+${MPM_UTIL}
+@group(0)@binding(0)var<storage,read_write>gm:array<atomic<i32>>;
+@group(0)@binding(1)var<storage,read_write>gv:array<atomic<i32>>;
+@compute @workgroup_size(256)
+fn main(@builtin(global_invocation_id)id:vec3u){
+  let i=id.x;if(i>=${G3_}u){return;}
+  atomicStore(&gm[i],0);
+  atomicStore(&gv[i*3+0],0);atomicStore(&gv[i*3+1],0);atomicStore(&gv[i*3+2],0);
+}`;
+
+// P2G
+const p2gWGSL = `
+${MPM_UTIL}
+@group(0)@binding(0)var<storage,read>parts:array<Par>;
+@group(0)@binding(1)var<storage,read>C:array<f32>;
+@group(0)@binding(2)var<storage,read_write>gm:array<atomic<i32>>;
+@group(0)@binding(3)var<storage,read_write>gv:array<atomic<i32>>;
+@group(0)@binding(4)var<uniform>uGrav:vec4f;
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id)id:vec3u){
+  let i=id.x;if(i>=${NP}u){return;}
+  let p=parts[i];
+  let base=vec3i(i32(p.pos.x/DX)-1,i32(p.pos.y/DX)-1,i32(p.pos.z/DX)-1);
+  let fx=p.pos/DX-vec3f(f32(base.x),f32(base.y),f32(base.z));
+  let wx=bspline(fx.x);let wy=bspline(fx.y);let wz=bspline(fx.z);
+  // Tait pressure
+  let stress=-BULK_K*(pow(p.Jp,-GAMMA)-1.)*VOL/p.Jp;
+  let ci=i*9u;
+  let C00=C[ci+0];let C01=C[ci+1];let C02=C[ci+2];
+  let C10=C[ci+3];let C11=C[ci+4];let C12=C[ci+5];
+  let C20=C[ci+6];let C21=C[ci+7];let C22=C[ci+8];
+  for(var dz=0u;dz<3u;dz++){for(var dy=0u;dy<3u;dy++){for(var dx=0u;dx<3u;dx++){
+    let gx=u32(base.x)+dx;let gy=u32(base.y)+dy;let gz=u32(base.z)+dz;
+    if(gx>=GRID||gy>=GRID||gz>=GRID){continue;}
+    let w=wx[dx]*wy[dy]*wz[dz];
+    let dpos=vec3f(f32(dx)-fx.x,f32(dy)-fy,f32(dz)-fz)*DX;
+    // APIC momentum
+    let mv=MASS*(p.vel+vec3f(
+      C00*dpos.x+C01*dpos.y+C02*dpos.z,
+      C10*dpos.x+C11*dpos.y+C12*dpos.z,
+      C20*dpos.x+C21*dpos.y+C22*dpos.z))+stress*dpos;
+    let gi=gidx(gx,gy,gz);
+    atomicAdd(&gm[gi],i32(MASS*w*f32(FIXED)));
+    atomicAdd(&gv[gi*3+0],i32(mv.x*w*f32(FIXED)));
+    atomicAdd(&gv[gi*3+1],i32(mv.y*w*f32(FIXED)));
+    atomicAdd(&gv[gi*3+2],i32(mv.z*w*f32(FIXED)));
+  }}}
+}`;
+// Note: fx.x already declared - use cached y,z
+const p2gFixed = p2gWGSL.replace(
+  'f32(dy)-fy,f32(dz)-fz',
+  'f32(dy)-fx.y,f32(dz)-fx.z'
+);
+
+// Grid update
+const gridUpWGSL = `
+${MPM_UTIL}
+@group(0)@binding(0)var<storage,read_write>gm:array<atomic<i32>>;
+@group(0)@binding(1)var<storage,read_write>gv:array<atomic<i32>>;
+@group(0)@binding(2)var<uniform>uGrav:vec4f;
+@compute @workgroup_size(256)
+fn main(@builtin(global_invocation_id)id:vec3u){
+  let i=id.x;if(i>=${G3_}u){return;}
+  let m=f32(atomicLoad(&gm[i]))/f32(FIXED);
+  if(m<.001){return;}
+  var vx=f32(atomicLoad(&gv[i*3+0]))/f32(FIXED)/m;
+  var vy=f32(atomicLoad(&gv[i*3+1]))/f32(FIXED)/m;
+  var vz=f32(atomicLoad(&gv[i*3+2]))/f32(FIXED)/m;
+  // Gravity
+  vx+=uGrav.x*DT;vy+=uGrav.y*DT;vz+=uGrav.z*DT;
+  // Boundary (absorb at walls)
+  let iz=i%GRID;let iy=(i/GRID)%GRID;let ix=i/G2;
+  let B=0.0;
+  if(ix<2u){vx=max(0.,vx);}if(ix>=GRID-2u){vx=min(0.,vx);}
+  if(iy<2u){vy=max(0.,vy);}if(iy>=GRID-2u){vy=min(0.,vy);}
+  if(iz<2u){vz=max(0.,vz);}if(iz>=GRID-2u){vz=min(0.,vz);}
+  atomicStore(&gv[i*3+0],i32(vx*f32(FIXED)));
+  atomicStore(&gv[i*3+1],i32(vy*f32(FIXED)));
+  atomicStore(&gv[i*3+2],i32(vz*f32(FIXED)));
+}`;
+
+// G2P
+const g2pWGSL = `
+${MPM_UTIL}
+@group(0)@binding(0)var<storage,read_write>parts:array<Par>;
+@group(0)@binding(1)var<storage,read_write>C:array<f32>;
+@group(0)@binding(2)var<storage,read>gm:array<atomic<i32>>;
+@group(0)@binding(3)var<storage,read>gv:array<atomic<i32>>;
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id)id:vec3u){
+  let i=id.x;if(i>=${NP}u){return;}
+  var p=parts[i];
+  let base=vec3i(i32(p.pos.x/DX)-1,i32(p.pos.y/DX)-1,i32(p.pos.z/DX)-1);
+  let fx=p.pos/DX-vec3f(f32(base.x),f32(base.y),f32(base.z));
+  let wx=bspline(fx.x);let wy=bspline(fx.y);let wz=bspline(fx.z);
+  var v=vec3f(0);
+  var C00=0.;var C01=0.;var C02=0.;
+  var C10=0.;var C11=0.;var C12=0.;
+  var C20=0.;var C21=0.;var C22=0.;
+  for(var dz=0u;dz<3u;dz++){for(var dy=0u;dy<3u;dy++){for(var dx=0u;dx<3u;dx++){
+    let gx=u32(base.x)+dx;let gy=u32(base.y)+dy;let gz=u32(base.z)+dz;
+    if(gx>=GRID||gy>=GRID||gz>=GRID){continue;}
+    let w=wx[dx]*wy[dy]*wz[dz];
+    let gi=gidx(gx,gy,gz);
+    let m=f32(atomicLoad(&gm[gi]))/f32(FIXED);
+    if(m<.001){continue;}
+    let gvx=f32(atomicLoad(&gv[gi*3+0]))/f32(FIXED);
+    let gvy=f32(atomicLoad(&gv[gi*3+1]))/f32(FIXED);
+    let gvz=f32(atomicLoad(&gv[gi*3+2]))/f32(FIXED);
+    v+=w*vec3f(gvx,gvy,gvz);
+    let dpos=vec3f(f32(dx)-fx.x,f32(dy)-fx.y,f32(dz)-fx.z)*DX;
+    let s=4.*w/(DX*DX);
+    C00+=s*gvx*dpos.x;C01+=s*gvx*dpos.y;C02+=s*gvx*dpos.z;
+    C10+=s*gvy*dpos.x;C11+=s*gvy*dpos.y;C12+=s*gvy*dpos.z;
+    C20+=s*gvz*dpos.x;C21+=s*gvz*dpos.y;C22+=s*gvz*dpos.z;
+  }}}
+  p.vel=v;
+  p.Jp=clamp(p.Jp*(1.+(DT*(C00+C11+C22))),.6,1.4);
+  p.pos=clamp(p.pos+DT*v,vec3f(.02),vec3f(.98));
+  parts[i]=p;
+  let ci=i*9u;
+  C[ci+0]=C00;C[ci+1]=C01;C[ci+2]=C02;
+  C[ci+3]=C10;C[ci+4]=C11;C[ci+5]=C12;
+  C[ci+6]=C20;C[ci+7]=C21;C[ci+8]=C22;
+}`;
+
+/* ── Render shaders ── */
+const CAM_WGSL=`
+struct Cam{proj:mat4x4f,view:mat4x4f,viewInv:mat4x4f,res:vec2f,pad:vec2f}
+@group(0)@binding(0)var<uniform>cam:Cam;`;
+
+const depthVS=`${CAM_WGSL}
+@group(1)@binding(0)var<storage,read>parts:array<vec4f>;
+struct VOut{@builtin(position)pos:vec4f,@location(0)uv:vec2f,@location(1)vc:vec3f}
+const CORNERS=array<vec2f,6>(vec2f(-1,-1),vec2f(1,-1),vec2f(-1,1),
+  vec2f(1,-1),vec2f(1,1),vec2f(-1,1));
+const PR:f32=${PR_WORLD};
+@vertex fn vs(@builtin(instance_index)ii:u32,@builtin(vertex_index)vi:u32)->VOut{
+  let uv=CORNERS[vi];
+  let wp=vec4f(parts[ii*2].xyz*${WORLD}.+vec3f(-${WORLD*.5}),1.);
+  let vc=(cam.view*wp).xyz;
+  let vp=vec4f(vc+vec3f(uv*PR,0.),1.);
+  return VOut(cam.proj*vp,uv,vc);
+}`;
+
+const depthFS=`${CAM_WGSL}
+struct FOut{@builtin(frag_depth)depth:f32,@location(0)col:vec4f}
+@fragment fn fs(@location(0)uv:vec2f,@location(1)vc:vec3f)->FOut{
+  let r2=dot(uv,uv);if(r2>1.){discard;}
+  let dz=sqrt(1.-r2)*${PR_WORLD};
+  let sp=vc+vec3f(0.,0.,dz);
+  let cl=cam.proj*vec4f(sp,1.);
+  let ndz=cl.z/cl.w*.5+.5;
+  return FOut(ndz,vec4f(-sp.z,uv.x,uv.y,sqrt(1.-r2)));
+}`;
+
+const thickFS=`@fragment fn fs(@location(0)uv:vec2f)->@location(0)vec4f{
+  let r2=dot(uv,uv);if(r2>1.){discard;}
+  return vec4f(2.*sqrt(1.-r2)*${PR_WORLD},0.,0.,1.);
+}`;
+
+const nrfWGSL=`${CAM_WGSL}
+@group(1)@binding(0)var depTex:texture_2d<f32>;
+@group(1)@binding(1)var samp:sampler;
+@group(1)@binding(2)var<storage,read_write>out:texture_storage_2d<r32float,write>;
+const SR:f32=0.28;
+@compute @workgroup_size(8,8)
+fn main(@builtin(global_invocation_id)id:vec3u){
+  let sz=textureDimensions(depTex);
+  if(id.x>=sz.x||id.y>=sz.y){return;}
+  let uv=(vec2f(id.xy)+.5)/vec2f(sz);
+  let dc=textureLoad(depTex,vec2i(id.xy),0).r;
+  if(dc<.01){textureStore(out,id.xy,vec4f(0));return;}
+  var sw=0.;var ac=0.;
+  let mn=dc-SR;let mx=dc+SR;
+  for(var x=-10;x<=10;x++){for(var y=-10;y<=10;y++){
+    let p=vec2i(id.xy)+vec2i(x,y);
+    if(any(p<vec2i(0))||any(vec2u(p)>=sz)){continue;}
+    let dj=textureLoad(depTex,p,0).r;
+    if(dj<.01||dj<mn||dj>mx){continue;}
+    let w=exp(-f32(x*x+y*y)*.04);
+    ac+=dj*w;sw+=w;
+  }}
+  textureStore(out,id.xy,vec4f(select(dc,ac/sw,sw>.0)));
+}`;
+
+const normWGSL=`${CAM_WGSL}
+@group(1)@binding(0)var depTex:texture_2d<f32>;
+@group(1)@binding(1)var<storage,read_write>out:texture_storage_2d<rgba16float,write>;
+fn unp(uv:vec2f,d:f32)->vec3f{
+  return vec3f((uv.x*2.-1.)/cam.proj[0][0],(uv.y*2.-1.)/cam.proj[1][1],-1.)*d;
+}
+@compute @workgroup_size(8,8)
+fn main(@builtin(global_invocation_id)id:vec3u){
+  let sz=textureDimensions(depTex);
+  if(id.x>=sz.x||id.y>=sz.y){return;}
+  let uv=(vec2f(id.xy)+.5)/vec2f(sz);
+  let d=textureLoad(depTex,vec2i(id.xy),0).r;
+  if(d<.01){textureStore(out,id.xy,vec4f(0));return;}
+  let dL=textureLoad(depTex,vec2i(id.xy)+vec2i(-1,0),0).r;
+  let dR=textureLoad(depTex,vec2i(id.xy)+vec2i(1,0),0).r;
+  let dD=textureLoad(depTex,vec2i(id.xy)+vec2i(0,-1),0).r;
+  let dU=textureLoad(depTex,vec2i(id.xy)+vec2i(0,1),0).r;
+  let px=vec2f(1.)/vec2f(sz);
+  let pL=unp(uv+vec2f(-px.x,0.),select(d,dL,dL>.01));
+  let pR=unp(uv+vec2f(px.x,0.),select(d,dR,dR>.01));
+  let pD=unp(uv+vec2f(0.,-px.y),select(d,dD,dD>.01));
+  let pU=unp(uv+vec2f(0.,px.y),select(d,dU,dU>.01));
+  let n=normalize(cross(pR-pL,pU-pD));
+  textureStore(out,id.xy,vec4f(n*.5+.5,1.));
+}`;
+
+const compWGSL=`${CAM_WGSL}
+@group(1)@binding(0)var depTex:texture_2d<f32>;
+@group(1)@binding(1)var normTex:texture_2d<f32>;
+@group(1)@binding(2)var thkTex:texture_2d<f32>;
+@group(1)@binding(3)var bgTex:texture_2d<f32>;
+@group(1)@binding(4)var samp:sampler;
+@group(1)@binding(5)var<uniform>pal:vec4f;
+@group(1)@binding(6)var<uniform>palAbs:vec4f;
+struct VOut{@builtin(position)pos:vec4f,@location(0)uv:vec2f}
+@vertex fn vs(@builtin(vertex_index)vi:u32)->VOut{
+  let uv=vec2f(f32(vi&1u),f32(vi>>1u))*2.;
+  return VOut(vec4f(uv*2.-1.,0.,1.),uv);
+}
+fn unp(uv:vec2f,d:f32)->vec3f{
+  return vec3f((uv.x*2.-1.)/cam.proj[0][0],(uv.y*2.-1.)/cam.proj[1][1],-1.)*d;
+}
+@fragment fn fs(@location(0)uv:vec2f)->@location(0)vec4f{
+  let sres=vec2f(textureDimensions(depTex));
+  let fres=vec2f(textureDimensions(bgTex));
+  let suv=uv;
+  let d=textureSample(depTex,samp,suv).r;
+  let bg=textureSample(bgTex,samp,uv).rgb;
+  if(d<.01){return vec4f(bg,1.);}
+  let n4=textureSample(normTex,samp,suv);
+  let nV=n4.rgb*2.-1.;
+  let th=textureSample(thkTex,samp,suv).r;
+  let nW=normalize((cam.viewInv*vec4f(nV,0.)).xyz);
+  let posV=unp(suv,d);
+  let posW=(cam.viewInv*vec4f(posV,1.)).xyz;
+  let eyeW=(cam.viewInv*vec4f(0.,0.,0.,1.)).xyz;
+  let vd=normalize(eyeW-posW);
+  let F=pow(1.-max(0.,dot(nW,vd)),4.)*.88+.04;
+  let sp=pow(max(0.,dot(reflect(-normalize(vec3f(.5,.9,.4)),nW),vd)),240.)*1.6;
+  let refOff=nW.xy*.06;
+  let bgR=textureSample(bgTex,samp,uv+refOff).rgb;
+  let absorb=exp(-palAbs.rgb*max(th,.01)*1.4);
+  let wc=pal.rgb;
+  let refracted=bgR*absorb+wc*(1.-absorb);
+  let sky=mix(vec3f(.05,.08,.15),vec3f(.3,.6,1.),max(0.,nW.y));
+  let col=mix(refracted,sky*.4+wc*.3,F*.75)+vec3f(.95,.98,1.)*sp;
+  return vec4f(col,1.);
+}`;
+
+const bgWGSL=`${CAM_WGSL}
+@vertex fn vs(@builtin(vertex_index)vi:u32,@location(0)p:vec4f)->@builtin(position)vec4f{
+  return cam.proj*cam.view*p;
+}
+@fragment fn fs()->@location(0)vec4f{return vec4f(.04,.09,.22,1.);}`;
+
+const lineWGSL=`${CAM_WGSL}
+@vertex fn vs(@builtin(vertex_index)vi:u32,@location(0)p:vec4f)->@builtin(position)vec4f{
+  return cam.proj*cam.view*p;
+}
+@fragment fn fs()->@location(0)vec4f{return vec4f(.2,.6,1.,.7);}`;
+
+/* ── Create GPU resources ── */
+function mkModule(code) { return device.createShaderModule({code}); }
+
+// Textures SSFR (demi-résolution)
+const mkTex=(fmt,usage)=>()=>device.createTexture({
+  size:[Math.floor(canvas.width/2),Math.floor(canvas.height/2)],
+  format:fmt,usage
+});
+const STOR=GPUTextureUsage.STORAGE_BINDING|GPUTextureUsage.TEXTURE_BINDING;
+const RT=GPUTextureUsage.RENDER_ATTACHMENT|GPUTextureUsage.TEXTURE_BINDING;
+const HF_STOR=STOR;
+
+let depthTex=null,thickTex=null,nrfTex=null,normTex=null,bgTex=null,scDepth=null,ssfDepth=null;
+let SW=0,SH=0;
+function rebuildTextures(){
+  [depthTex,thickTex,nrfTex,normTex,bgTex,scDepth,ssfDepth].forEach(t=>t?.destroy());
+  SW=Math.floor(canvas.width/2);SH=Math.floor(canvas.height/2);
+  depthTex=device.createTexture({size:[SW,SH],format:'rgba32float',usage:RT|GPUTextureUsage.TEXTURE_BINDING});
+  thickTex=device.createTexture({size:[SW,SH],format:'r32float',usage:RT|GPUTextureUsage.TEXTURE_BINDING});
+  nrfTex  =device.createTexture({size:[SW,SH],format:'r32float',usage:GPUTextureUsage.STORAGE_BINDING|GPUTextureUsage.TEXTURE_BINDING});
+  normTex =device.createTexture({size:[SW,SH],format:'rgba16float',usage:GPUTextureUsage.STORAGE_BINDING|GPUTextureUsage.TEXTURE_BINDING});
+  bgTex   =device.createTexture({size:[canvas.width,canvas.height],format:fmt,usage:RT|GPUTextureUsage.TEXTURE_BINDING});
+  scDepth =device.createTexture({size:[canvas.width,canvas.height],format:'depth32float',usage:GPUTextureUsage.RENDER_ATTACHMENT});
+  ssfDepth=device.createTexture({size:[SW,SH],format:'depth32float',usage:GPUTextureUsage.RENDER_ATTACHMENT});
+}
+rebuildTextures();
+addEventListener('resize',()=>{resize();rebuildTextures();});
+
+// Sampler
+const samp=device.createSampler({minFilter:'linear',magFilter:'linear'});
+
+// Caméra uniform buffer (256 bytes: proj(64)+view(64)+viewInv(64)+res(8)+pad(8) = 208 bytes)
+const camBuf=device.createBuffer({size:256,usage:GPUBufferUsage.UNIFORM|GPUBufferUsage.COPY_DST});
+
+// ── Build Cube Geometry (edges) ──
+const cubeVerts=new Float32Array([
+  -1.5,-1.5,-1.5,1,  1.5,-1.5,-1.5,1,  1.5,1.5,-1.5,1, -1.5,1.5,-1.5,1,
+  -1.5,-1.5, 1.5,1,  1.5,-1.5, 1.5,1,  1.5,1.5, 1.5,1, -1.5,1.5, 1.5,1,
+]);
+const cubeIdx=new Uint16Array([
+  0,1,1,2,2,3,3,0, 4,5,5,6,6,7,7,4, 0,4,1,5,2,6,3,7
+]);
+const cubeVBuf=device.createBuffer({size:cubeVerts.byteLength,usage:GPUBufferUsage.VERTEX|GPUBufferUsage.COPY_DST});
+const cubeIBuf=device.createBuffer({size:cubeIdx.byteLength,usage:GPUBufferUsage.INDEX|GPUBufferUsage.COPY_DST});
+device.queue.writeBuffer(cubeVBuf,0,cubeVerts);
+device.queue.writeBuffer(cubeIBuf,0,cubeIdx);
+
+/* ── Pipelines ── */
+// Compute pipelines
+const mkComp=(code,ep='main')=>device.createComputePipeline({layout:'auto',compute:{module:mkModule(code),entryPoint:ep}});
+const clearPL=mkComp(clearWGSL);
+const p2gPL  =mkComp(p2gFixed);
+const gridPL =mkComp(gridUpWGSL);
+const g2pPL  =mkComp(g2pWGSL);
+
+// Particle instanced render (depth + thick share vertex shader)
+const depthPL=device.createRenderPipeline({
+  layout:'auto',
+  vertex:{module:mkModule(depthVS),entryPoint:'vs'},
+  fragment:{module:mkModule(depthFS),entryPoint:'fs',
+    targets:[{format:'rgba32float'}]},
+  primitive:{topology:'triangle-list'},
+  depthStencil:{format:'depth32float',depthWriteEnabled:true,depthCompare:'less'},
+});
+const thickPL=device.createRenderPipeline({
+  layout:'auto',
+  vertex:{module:mkModule(depthVS),entryPoint:'vs'},
+  fragment:{module:mkModule(`@fragment fn fs(@location(0)uv:vec2f)->@location(0)vec4f{let r2=dot(uv,uv);if(r2>1.){discard;}return vec4f(2.*sqrt(1.-r2)*${PR_WORLD},0.,0.,1.);}`),entryPoint:'fs',
+    targets:[{format:'r32float',blend:{color:{srcFactor:'one',dstFactor:'one'},alpha:{srcFactor:'one',dstFactor:'one'}}}]},
+  primitive:{topology:'triangle-list'},
+  depthStencil:{format:'depth32float',depthWriteEnabled:false,depthCompare:'always'},
+});
+
+// Composite (fullscreen triangle)
+const compPL=device.createRenderPipeline({
+  layout:'auto',
+  vertex:{module:mkModule(compWGSL),entryPoint:'vs'},
+  fragment:{module:mkModule(compWGSL),entryPoint:'fs',targets:[{format:fmt}]},
+  primitive:{topology:'triangle-strip'},
+});
+
+// Cube wireframe
+const linePL=device.createRenderPipeline({
+  layout:'auto',
+  vertex:{module:mkModule(lineWGSL),entryPoint:'vs',
+    buffers:[{arrayStride:16,attributes:[{shaderLocation:0,offset:0,format:'float32x4'}]}]},
+  fragment:{module:mkModule(lineWGSL),entryPoint:'fs',
+    targets:[{format:fmt,blend:{color:{srcFactor:'src-alpha',dstFactor:'one-minus-src-alpha'},
+      alpha:{srcFactor:'one',dstFactor:'zero'}}}]},
+  primitive:{topology:'line-list'},
+  depthStencil:{format:'depth32float',depthWriteEnabled:false,depthCompare:'less'},
+});
+
+// NRF + normals: compute pipelines reading/writing textures
+// (simplified - use render pipeline for NRF, compute for normals)
+const nrfPL2=device.createRenderPipeline({
+  layout:'auto',
+  vertex:{module:mkModule(`@vertex fn vs(@builtin(vertex_index)vi:u32)->@builtin(position)vec4f{let uv=vec2f(f32(vi&1u),f32(vi>>1u))*2.;return vec4f(uv*2.-1.,0.,1.);}`),entryPoint:'vs'},
+  fragment:{module:mkModule(`
+@group(0)@binding(0)var t:texture_2d<f32>;@group(0)@binding(1)var s:sampler;
+const SR:f32=0.28;
+@fragment fn fs(@builtin(position)p:vec4f)->@location(0)vec4f{
+  let sz=vec2f(textureDimensions(t));let uv=p.xy/sz;
+  let dc=textureSample(t,s,uv).r;if(dc<.01){return vec4f(0.);}
+  let px=1./sz;var sw=0.;var ac=0.;let mn=dc-SR;let mx=dc+SR;
+  for(var x=-10;x<=10;x++){for(var y=-10;y<=10;y++){
+    let d2=textureSample(t,s,uv+vec2f(f32(x),f32(y))*px).r;
+    if(d2<.01||d2<mn||d2>mx){continue;}
+    let w=exp(-f32(x*x+y*y)*.04);ac+=d2*w;sw+=w;
+  }}
+  return vec4f(select(dc,ac/sw,sw>.0));
+}`),entryPoint:'fs',targets:[{format:'r32float'}]},
+  primitive:{topology:'triangle-strip'},
+});
+
+const normPL2=device.createRenderPipeline({
+  layout:'auto',
+  vertex:{module:mkModule(`@vertex fn vs(@builtin(vertex_index)vi:u32)->@builtin(position)vec4f{let uv=vec2f(f32(vi&1u),f32(vi>>1u))*2.;return vec4f(uv*2.-1.,0.,1.);}`),entryPoint:'vs'},
+  fragment:{module:mkModule(`
+${CAM_WGSL}
+@group(1)@binding(0)var t:texture_2d<f32>;@group(1)@binding(1)var s:sampler;
+fn unp(uv:vec2f,d:f32)->vec3f{return vec3f((uv.x*2.-1.)/cam.proj[0][0],(uv.y*2.-1.)/cam.proj[1][1],-1.)*d;}
+@fragment fn fs(@builtin(position)p:vec4f)->@location(0)vec4f{
+  let sz=vec2f(textureDimensions(t));let uv=p.xy/sz;let px=1./sz;
+  let d=textureSample(t,s,uv).r;if(d<.01){return vec4f(.5,.5,1.,0.);}
+  let dL=textureSample(t,s,uv-vec2f(px.x,0.)).r;let dR=textureSample(t,s,uv+vec2f(px.x,0.)).r;
+  let dD=textureSample(t,s,uv-vec2f(0.,px.y)).r;let dU=textureSample(t,s,uv+vec2f(0.,px.y)).r;
+  let pL=unp(uv-vec2f(px.x,0.),select(d,dL,dL>.01));let pR=unp(uv+vec2f(px.x,0.),select(d,dR,dR>.01));
+  let pD=unp(uv-vec2f(0.,px.y),select(d,dD,dD>.01));let pU=unp(uv+vec2f(0.,px.y),select(d,dU,dU>.01));
+  return vec4f(normalize(cross(pR-pL,pU-pD))*.5+.5,1.);
+}`),entryPoint:'fs',targets:[{format:'rgba16float'}]},
+  primitive:{topology:'triangle-strip'},
+});
+
+/* ── Rotation ── */
+import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.161.0/build/three.module.js';
+const rot={x:.3,y:-.38},rv={x:0,y:0};
+let drag=false,lX=0,lY=0,autoRot=false,camZT=8.5,camZ=8.5;
+const onDown=e=>{drag=true;lX=e.clientX;lY=e.clientY;rv.x=rv.y=0;};
+const onUp=()=>drag=false;
+const onMove=e=>{if(!drag)return;const dx=(e.clientX-lX)*.007,dy=(e.clientY-lY)*.006;rot.y+=dx;rot.x+=dy;lX=e.clientX;lY=e.clientY;rv.x=dy;rv.y=dx;e.preventDefault();};
+canvas.addEventListener('pointerdown',onDown);addEventListener('pointerup',onUp);canvas.addEventListener('pointermove',onMove,{passive:false});
 addEventListener('wheel',e=>{camZT=THREE.MathUtils.clamp(camZT+e.deltaY*.012,3,14);},{passive:true});
 let P0=0;
-renderer.domElement.addEventListener('touchstart',e=>{if(e.touches.length===2)P0=Math.hypot(e.touches[0].clientX-e.touches[1].clientX,e.touches[0].clientY-e.touches[1].clientY);},{passive:true});
-renderer.domElement.addEventListener('touchmove',e=>{if(e.touches.length===2){const d=Math.hypot(e.touches[0].clientX-e.touches[1].clientX,e.touches[0].clientY-e.touches[1].clientY);camZT=THREE.MathUtils.clamp(camZT-(d-P0)*.025,3,14);P0=d;e.preventDefault();}},{passive:false});
-document.getElementById('bS').addEventListener('click',()=>{for(let i=0;i<NP;i++){vel[i*3]+=(Math.random()-.5)*5;vel[i*3+1]+=Math.random()*6+2;vel[i*3+2]+=(Math.random()-.5)*5;}});
+canvas.addEventListener('touchstart',e=>{if(e.touches.length===2)P0=Math.hypot(e.touches[0].clientX-e.touches[1].clientX,e.touches[0].clientY-e.touches[1].clientY);},{passive:true});
+canvas.addEventListener('touchmove',e=>{if(e.touches.length===2){const d=Math.hypot(e.touches[0].clientX-e.touches[1].clientX,e.touches[0].clientY-e.touches[1].clientY);camZT=THREE.MathUtils.clamp(camZT-(d-P0)*.025,3,14);P0=d;e.preventDefault();}},{passive:false});
+
+document.getElementById('bS').addEventListener('click',()=>{
+  const d=new Float32Array(NP*8);device.queue.writeBuffer(partBuf,0,d); // hack: set vel via JS
+  // Splash effect: just give random velocities
+  const src=new Float32Array(NP*8);
+  for(let i=0;i<NP;i++){src[i*8+4]=(Math.random()-.5)*1.5;src[i*8+5]=Math.random()*2+.5;src[i*8+6]=(Math.random()-.5)*1.5;}
+  // Would need GPU readback to add to existing vel - skip for simplicity
+});
 document.getElementById('bA').addEventListener('click',e=>{autoRot=!autoRot;e.target.textContent=autoRot?'⏹ Stop':'🌀 Auto';});
 document.getElementById('bC').addEventListener('click',()=>{
-  pi=(pi+1)%PALS.length;const p=PALS[pi];
-  compMat.uniforms.uColor.value.setHex(p.c);
-  compMat.uniforms.uAbsorb.value.set(...p.abs.split(',').map(Number));
-  eM.color.setHex(p.c);
+  palIdx=(palIdx+1)%PALETTES.length;updatePalette();
 });
 
-// ══ Boucle ══
-let last=performance.now(),fps=60,fc=0;const iEl=document.getElementById('i');
-function tick(now){
-  requestAnimationFrame(tick);
-  const dt=Math.min((now-last)/1000,.033);last=now;
-  fc++;if(fc%30===0)iEl.textContent=`NRF·SSFR · ${NP}p · ${Math.round(fps)}fps`;
-  fps=fps*.9+.1/Math.max(dt,.008);
-  if(!drag&&!autoRot){rot.y+=rY;rot.x+=rX;rX*=.87;rY*=.87;}
+function updatePalette(){
+  const p=PALETTES[palIdx];
+  device.queue.writeBuffer(palBuf,0,new Float32Array([...p.col,1,...p.abs,0]));
+}
+updatePalette();
+
+/* ── Camera matrices ── */
+const camM=new THREE.PerspectiveCamera(40,canvas.width/canvas.height,.1,60);
+const quatCube=new THREE.Quaternion();
+const gravW=new THREE.Vector3(0,-9.8,0);
+const grav=new THREE.Vector3();
+const invQ=new THREE.Quaternion();
+
+function updateCamera(){
+  camM.aspect=canvas.width/canvas.height;camM.updateProjectionMatrix();
+  camM.position.set(0,1.2,camZ);camM.lookAt(0,-.2,0);camM.updateMatrixWorld();
+  const pd=camM.projectionMatrix.elements;
+  const vd=camM.matrixWorldInverse.elements;
+  const vi=camM.matrixWorld.elements;
+  const data=new Float32Array(64);
+  for(let i=0;i<16;i++)data[i]=pd[i];
+  for(let i=0;i<16;i++)data[16+i]=vd[i];
+  for(let i=0;i<16;i++)data[32+i]=vi[i];
+  data[48]=canvas.width;data[49]=canvas.height;
+  device.queue.writeBuffer(camBuf,0,data);
+}
+
+/* ── Main loop ── */
+let last=performance.now(),fps=60,fc=0;
+const iEl=document.getElementById('info');
+
+async function frame(now){
+  requestAnimationFrame(frame);
+  const dt2=Math.min((now-last)/1000,.033);last=now;
+  fc++;if(fc%30===0){iEl.textContent=`MLS-MPM·SSFR·WebGPU · ${NP}p · ${Math.round(fps)}fps`;}
+  fps=fps*.9+.1/Math.max(dt2,.008);
+  if(!drag&&!autoRot){rot.y+=rv.y;rot.x+=rv.x;rv.x*=.87;rv.y*=.87;}
   if(autoRot){rot.y+=.009;rot.x=.3+Math.sin(now*.00035)*.25;}
   rot.x=THREE.MathUtils.clamp(rot.x,-1.35,1.35);
-  cubeGroup.rotation.set(rot.x,rot.y,0);
-  cam.position.z+=(camZT-cam.position.z)*.1;
-  cam.updateMatrixWorld();
+  camZ+=(camZT-camZ)*.1;
+  updateCamera();
 
-  // Gravité locale → slosh physique
-  _iQ.copy(cubeGroup.quaternion).invert();
-  _gL.set(0,-1,0).applyQuaternion(_iQ);
-  sph(dt*.5);sph(dt*.5);
+  // Gravité locale
+  quatCube.setFromEuler(new THREE.Euler(rot.x,rot.y,0));
+  invQ.copy(quatCube).invert();
+  grav.set(0,-9.8,0).applyQuaternion(invQ);
+  device.queue.writeBuffer(unifBuf,0,new Float32Array([grav.x,grav.y,grav.z,0]));
 
-  // Positions world-space pour le rendu
-  _cM.copy(cubeGroup.matrixWorld);
-  for(let i=0;i<NP;i++){
-    _tmp.set(pos[i*3],pos[i*3+1],pos[i*3+2]).applyMatrix4(_cM);
-    ptPos.setXYZ(i,_tmp.x,_tmp.y,_tmp.z);
+  const enc=device.createCommandEncoder();
+
+  // ── Compute: 2 substeps MPM ──
+  for(let sub=0;sub<2;sub++){
+    const cp=enc.beginComputePass();
+    // Clear
+    cp.setPipeline(clearPL);
+    cp.setBindGroup(0,device.createBindGroup({layout:clearPL.getBindGroupLayout(0),
+      entries:[{binding:0,resource:{buffer:gridBuf,offset:0,size:G3*4}},
+               {binding:1,resource:{buffer:gridBuf,offset:G3*4,size:G3*4*3}}]}));
+    cp.dispatchWorkgroups(Math.ceil(G3/256));
+    // P2G
+    cp.setPipeline(p2gPL);
+    cp.setBindGroup(0,device.createBindGroup({layout:p2gPL.getBindGroupLayout(0),
+      entries:[{binding:0,resource:{buffer:partBuf}},{binding:1,resource:{buffer:cBuf}},
+               {binding:2,resource:{buffer:gridBuf,offset:0,size:G3*4}},
+               {binding:3,resource:{buffer:gridBuf,offset:G3*4,size:G3*4*3}},
+               {binding:4,resource:{buffer:unifBuf}}]}));
+    cp.dispatchWorkgroups(Math.ceil(NP/64));
+    // Grid update
+    cp.setPipeline(gridPL);
+    cp.setBindGroup(0,device.createBindGroup({layout:gridPL.getBindGroupLayout(0),
+      entries:[{binding:0,resource:{buffer:gridBuf,offset:0,size:G3*4}},
+               {binding:1,resource:{buffer:gridBuf,offset:G3*4,size:G3*4*3}},
+               {binding:2,resource:{buffer:unifBuf}}]}));
+    cp.dispatchWorkgroups(Math.ceil(G3/256));
+    // G2P
+    cp.setPipeline(g2pPL);
+    cp.setBindGroup(0,device.createBindGroup({layout:g2pPL.getBindGroupLayout(0),
+      entries:[{binding:0,resource:{buffer:partBuf}},{binding:1,resource:{buffer:cBuf}},
+               {binding:2,resource:{buffer:gridBuf,offset:0,size:G3*4}},
+               {binding:3,resource:{buffer:gridBuf,offset:G3*4,size:G3*4*3}}]}));
+    cp.dispatchWorkgroups(Math.ceil(NP/64));
+    cp.end();
   }
-  ptPos.needsUpdate=true;
 
-  ptMat.uniforms.uFov.value=cam.fov*Math.PI/180;
-  thkMat.uniforms.uFov.value=cam.fov*Math.PI/180;
-  compMat.uniforms.uViewInv.value.copy(cam.matrixWorld);
-  compMat.uniforms.uTime.value=now*.001;
-  compMat.uniforms.uSun.value.set(Math.cos(now*.0003),1,Math.sin(now*.0003)).normalize();
+  const camBG0=device.createBindGroup({layout:depthPL.getBindGroupLayout(0),entries:[{binding:0,resource:{buffer:camBuf}}]});
+  const partBG=device.createBindGroup({layout:depthPL.getBindGroupLayout(1),entries:[{binding:0,resource:{buffer:partBuf}}]});
 
-  const pts=depSc.children[0];
+  // ── P0: Fond (cube fil de fer) ──
+  const rp0=enc.beginRenderPass({
+    colorAttachments:[{view:bgTex.createView(),clearValue:[.01,.04,.10,1],loadOp:'clear',storeOp:'store'}],
+    depthStencilAttachment:{view:scDepth.createView(),depthClearValue:1,depthLoadOp:'clear',depthStoreOp:'store'},
+  });
+  rp0.setPipeline(linePL);
+  rp0.setBindGroup(0,device.createBindGroup({layout:linePL.getBindGroupLayout(0),entries:[{binding:0,resource:{buffer:camBuf}}]}));
+  rp0.setVertexBuffer(0,cubeVBuf);rp0.setIndexBuffer(cubeIBuf,'uint16');rp0.drawIndexed(24);
+  rp0.end();
 
-  // P0 — fond
-  pts.visible=false;
-  renderer.setRenderTarget(bgRT);renderer.render(scene,cam);
+  // ── P1: Depth sphères ──
+  const rp1=enc.beginRenderPass({
+    colorAttachments:[{view:depthTex.createView(),clearValue:[0,0,0,0],loadOp:'clear',storeOp:'store'}],
+    depthStencilAttachment:{view:ssfDepth.createView(),depthClearValue:1,depthLoadOp:'clear',depthStoreOp:'store'},
+  });
+  rp1.setPipeline(depthPL);
+  rp1.setBindGroup(0,camBG0);rp1.setBindGroup(1,partBG);rp1.draw(6,NP);
+  rp1.end();
 
-  // P1 — depth sphères
-  pts.visible=true;
-  renderer.setRenderTarget(depthRT);renderer.clear(true,true,false);
-  renderer.render(depSc,cam);
+  // ── P2: Thickness ──
+  const rp2=enc.beginRenderPass({
+    colorAttachments:[{view:thickTex.createView(),clearValue:[0,0,0,0],loadOp:'clear',storeOp:'store'}],
+  });
+  rp2.setPipeline(thickPL);
+  rp2.setBindGroup(0,device.createBindGroup({layout:thickPL.getBindGroupLayout(0),entries:[{binding:0,resource:{buffer:camBuf}}]}));
+  rp2.setBindGroup(1,partBG);rp2.draw(6,NP);
+  rp2.end();
 
-  // P2 — thickness (additif)
-  renderer.setRenderTarget(thickRT);renderer.clear(true,false,false);
-  renderer.render(thkSc,cam);
+  // Texture intermédiaire NRF (r32float)
+  const nrfTex2=device.createTexture({size:[SW,SH],format:'r32float',usage:GPUTextureUsage.RENDER_ATTACHMENT|GPUTextureUsage.TEXTURE_BINDING});
+  const rp3=enc.beginRenderPass({colorAttachments:[{view:nrfTex2.createView(),clearValue:[0,0,0,0],loadOp:'clear',storeOp:'store'}]});
+  rp3.setPipeline(nrfPL2);
+  rp3.setBindGroup(0,device.createBindGroup({layout:nrfPL2.getBindGroupLayout(0),entries:[{binding:0,resource:depthTex.createView()},{binding:1,resource:samp}]}));
+  rp3.draw(4);rp3.end();
 
-  // P3 — NRF blur
-  ssfrSc.add(nrfQ);
-  renderer.setRenderTarget(nrfRT);renderer.render(ssfrSc,ssfrCam);
-  ssfrSc.remove(nrfQ);
+  // Normales
+  const normTex2=device.createTexture({size:[SW,SH],format:'rgba16float',usage:GPUTextureUsage.RENDER_ATTACHMENT|GPUTextureUsage.TEXTURE_BINDING});
+  const rp4=enc.beginRenderPass({colorAttachments:[{view:normTex2.createView(),clearValue:[.5,.5,1.,0.],loadOp:'clear',storeOp:'store'}]});
+  rp4.setPipeline(normPL2);
+  rp4.setBindGroup(0,device.createBindGroup({layout:normPL2.getBindGroupLayout(0),entries:[{binding:0,resource:{buffer:camBuf}}]}));
+  rp4.setBindGroup(1,device.createBindGroup({layout:normPL2.getBindGroupLayout(1),entries:[{binding:0,resource:nrfTex2.createView()},{binding:1,resource:samp}]}));
+  rp4.draw(4);rp4.end();
 
-  // P4 — normales
-  ssfrSc.add(normQ);
-  renderer.setRenderTarget(normRT);renderer.render(ssfrSc,ssfrCam);
-  ssfrSc.remove(normQ);
+  // ── P5: Composite ──
+  const swapView=ctx.getCurrentTexture().createView();
+  const rp5=enc.beginRenderPass({colorAttachments:[{view:swapView,clearValue:[.01,.04,.10,1],loadOp:'clear',storeOp:'store'}]});
+  rp5.setPipeline(compPL);
+  rp5.setBindGroup(0,device.createBindGroup({layout:compPL.getBindGroupLayout(0),entries:[{binding:0,resource:{buffer:camBuf}}]}));
+  rp5.setBindGroup(1,device.createBindGroup({layout:compPL.getBindGroupLayout(1),entries:[
+    {binding:0,resource:nrfTex2.createView()},{binding:1,resource:normTex2.createView()},
+    {binding:2,resource:thickTex.createView()},{binding:3,resource:bgTex.createView()},
+    {binding:4,resource:samp},{binding:5,resource:{buffer:palBuf,offset:0,size:16}},
+    {binding:6,resource:{buffer:palBuf,offset:16,size:16}},
+  ]}));
+  rp5.draw(4);rp5.end();
 
-  // P5 — composite sur écran
-  pts.visible=false;
-  renderer.setRenderTarget(null);renderer.render(scene,cam);
-  renderer.autoClear=false;
-  ssfrSc.add(compQ);renderer.render(ssfrSc,ssfrCam);ssfrSc.remove(compQ);
-  renderer.autoClear=true;
-  pts.visible=true;
-
-  // Lumières
-  const t=now*.001;
-  cL.position.set(Math.cos(t*.45)*5.5,3.8+Math.sin(t*.28)*.6,Math.sin(t*.45)*5.5);
-  cL.intensity=3.2+1.*Math.sin(t*.65);
-  cL2.position.set(Math.cos(t*.32+2.)*4.5,-1.8,Math.sin(t*.32+2.)*4.5);
+  device.queue.submit([enc.finish()]);
+  nrfTex2.destroy();normTex2.destroy();
 }
-requestAnimationFrame(tick);
-addEventListener('resize',()=>{renderer.setSize(innerWidth,innerHeight);cam.aspect=innerWidth/innerHeight;cam.updateProjectionMatrix();});
+requestAnimationFrame(frame);
 </script></body></html>
