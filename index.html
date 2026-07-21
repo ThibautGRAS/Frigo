@@ -106,16 +106,12 @@ button{font-family:inherit;color:inherit}
   border-radius:12px;color:var(--ink-dim);position:relative;
   border:1px solid transparent;
 }
-/* rail : pas de flou d'arrière-plan (coûteux au-dessus du canvas animé → saccades) */
-.rail .dbtn{backdrop-filter:none;-webkit-backdrop-filter:none;background:rgba(255,255,255,.60);
-  box-shadow:none;border-color:rgba(11,31,78,.07)}
-.rail .dbtn:hover{background:rgba(255,255,255,.82)}
-.rail .dbtn.on{background:rgba(255,255,255,.95);border-color:rgba(11,31,78,.13);
-  box-shadow:0 10px 30px rgba(11,31,78,.16)}
-/* entrées axes / leviers : plus compactes que les domaines */
-.dbtn.axl{padding:7.5px 17px;border-radius:10px}
-.dbtn.axl .dn{font-size:13px;font-weight:500}
-.dbtn.axl .idx{font-size:11.5px}
+/* rail : pas de flou d'arrière-plan (coûteux au-dessus du canvas animé → saccades) ;
+   repos translucide → survol net et clair → l'actif garde exactement cette couleur */
+.rail .dbtn{backdrop-filter:none;-webkit-backdrop-filter:none;background:rgba(255,255,255,.42);
+  box-shadow:none;border-color:rgba(11,31,78,.06)}
+.rail .dbtn:hover,.rail .dbtn.on{background:rgba(255,255,255,.96);border-color:rgba(11,31,78,.13)}
+.rail .dbtn:hover .dn,.rail .dbtn.on .dn{color:var(--navy)}
 .dbtn .idx{
   font-family:'Montserrat';font-weight:800;font-size:13px;color:var(--ink-faint);
   width:26px;flex-shrink:0;transition:color .2s;
@@ -1460,30 +1456,8 @@ DOMAINS.forEach((d,i)=>{
   b.addEventListener("click",()=>{stopPres();openDom===i?closeSliceNow():openSlice(i);});
   rail.appendChild(b);
 });
-/* le panneau présente aussi les axes stratégiques et les leviers transverses */
-function railSection(label,items,type){
-  const l=document.createElement("div");
-  l.className="rlabel sg";l.style.marginTop="15px";l.textContent=label;
-  rail.appendChild(l);
-  items.forEach((it,i)=>{
-    const b=document.createElement("button");
-    b.className="pill dbtn axl";
-    b._meta={type,index:i};
-    b.innerHTML=`<span class="bar"></span><span class="idx sg">${it.id}</span><span class="dn sg">${it.name}</span>`;
-    b.addEventListener("click",()=>{stopPres();
-      if(metaKey&&metaKey.type===type&&metaKey.index===i){closeCard();return;}
-      openDom>=0?openMetaCtx(type,i):openMeta(type,i);});
-    rail.appendChild(b);
-  });
-}
-railSection("Axes stratégiques",AXES,"axe");
-railSection("Leviers transverses",LEVIERS,"levier");
 function syncRail(){
   document.querySelectorAll(".dbtn.dom").forEach((b,i)=>b.classList.toggle("on",i===openDom));
-  document.querySelectorAll(".dbtn.axl").forEach(b=>{
-    const u=b._meta;
-    b.classList.toggle("on",!!(metaKey&&metaKey.type===u.type&&metaKey.index===u.index));
-  });
 }
 
 /* ════════════════════ AIDE & ACCUEIL ════════════════════ */
