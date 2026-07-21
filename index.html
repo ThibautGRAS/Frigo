@@ -391,12 +391,14 @@ background:rgba(255,255,255,.82);border-radius:100px;box-shadow:0 4px 16px rgba(
       </div>
       <div class="hb-sec">
         <div class="st sg">Interactions</div>
+        <div id="gestList">
         <div class="gesterow"><i>Glisser</i><span>Faire pivoter le cube librement</span></div>
-        <div class="gesterow"><i>Pincer</i><span>Zoomer / dézoomer (molette sur ordinateur)</span></div>
+        <div class="gesterow"><i>Pincer</i><span>Zoomer / dézoomer</span></div>
         <div class="gesterow"><i>A / L</i><span>Toucher une étiquette A1–A3 ou L1–L4 : rôle de l'axe / du levier</span></div>
-        <div class="gesterow"><i>Domaine</i><span>Toucher un domaine (rail) ou le cube : la tranche s'extrait</span></div>
+        <div class="gesterow"><i>Domaine</i><span>Toucher un domaine (menu ou cube) : la tranche s'extrait</span></div>
         <div class="gesterow"><i>Cellule</i><span>Toucher une cellule de la tranche ouverte : fiche détaillée + connexions</span></div>
         <div class="gesterow"><i>Vide</i><span>Toucher hors du cube : fermer fiche puis tranche</span></div>
+        </div>
         <div class="gesterow"><i>●</i><span>Présentation : visite cinématique automatique des 5 domaines</span></div>
       </div>
     </div>
@@ -436,7 +438,7 @@ background:rgba(255,255,255,.82);border-radius:100px;box-shadow:0 4px 16px rgba(
 <script>
 /* Garde-fous : jamais d'écran noir muet */
 window.__bootOK=false;
-window.__APP_VERSION="v2.11";
+window.__APP_VERSION="v2.12";
 window.addEventListener("DOMContentLoaded",function(){
   var v=document.getElementById("loaderVer");
   if(v)v.textContent=window.__APP_VERSION;
@@ -1488,8 +1490,22 @@ document.getElementById("helpBtn").addEventListener("click",()=>helpov.classList
 document.getElementById("helpClose").addEventListener("click",()=>helpov.classList.remove("show"));
 helpov.addEventListener("click",e=>{if(e.target===helpov)helpov.classList.remove("show");});
 const toast=document.getElementById("toast");
-setTimeout(()=>{toast.classList.add("show");},1600);
-setTimeout(()=>{toast.classList.remove("show");},6400);
+/* aide contextualisée : gestes tactiles sur iPhone/iPad, souris sur PC ;
+   sur PC ni toast ni bandeau de gestes (inutiles à la souris) */
+const IS_TOUCH=matchMedia('(pointer:coarse)').matches;
+if(IS_TOUCH){
+  setTimeout(()=>{toast.classList.add("show");},1600);
+  setTimeout(()=>{toast.classList.remove("show");},6400);
+}else{
+  hint.style.display="none";
+  document.getElementById("gestList").innerHTML=`
+    <div class="gesterow"><i>Glisser</i><span>Clic maintenu : faire pivoter le cube librement</span></div>
+    <div class="gesterow"><i>Molette</i><span>Zoomer / dézoomer</span></div>
+    <div class="gesterow"><i>A / L</i><span>Cliquer une étiquette A1–A3 ou L1–L4 : rôle de l'axe / du levier</span></div>
+    <div class="gesterow"><i>Domaine</i><span>Cliquer un domaine (menu ou cube) : la tranche s'extrait</span></div>
+    <div class="gesterow"><i>Cellule</i><span>Cliquer une cellule de la tranche ouverte : fiche détaillée + connexions</span></div>
+    <div class="gesterow"><i>Vide</i><span>Cliquer hors du cube : fermer fiche puis tranche</span></div>`;
+}
 const presCap=document.getElementById("presCap");
 function caption(html){
   if(html===null){presCap.classList.remove("show");return;}

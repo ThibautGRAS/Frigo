@@ -55,7 +55,8 @@ body.dark #fb .card{background:rgba(6,18,44,.92);border-color:rgba(60,130,255,.2
 /* ═════════════════════════ Paramètres ═════════════════════════ */
 const url=new URLSearchParams(location.search);
 const IS_TOUCH=matchMedia('(pointer:coarse)').matches;
-const G=Math.max(24,Math.min(64,parseInt(url.get('g'))||(IS_TOUCH?40:52))); // grille G³
+const SMALL=IS_TOUCH&&Math.min(screen.width,screen.height)<560;   // iPhone / petit mobile
+const G=Math.max(24,Math.min(64,parseInt(url.get('g'))||(SMALL?34:IS_TOUCH?40:60))); // grille G³
 const CUBE_W=3.0;                          // taille monde du cube visible
 const INNER_RATIO=.86;                     // cavité : le liquide vit dans 86 % du cube
 const INNER_W=CUBE_W*INNER_RATIO;          // → épaisseur de verre visible sur les parois
@@ -722,7 +723,7 @@ function makePipelines(){
 
   const K=(10*DIAM_W*.05*(CH/2))/Math.tan(FOV/2);
   const nrfMod=mod(NRF_WGSL);
-  const nrfC={projectedParticleConstant:K,maxFilterSize:24,
+  const nrfC={projectedParticleConstant:K,maxFilterSize:IS_TOUCH?24:40,
     depthThreshold:DIAM_W*5,muK:DIAM_W*1.5,tw:CW,th:CH};
   pipes.nrf1=device.createRenderPipeline({layout:auto,
     vertex:{module:nrfMod,entryPoint:'vs',constants:{tw:CW,th:CH}},
@@ -737,7 +738,7 @@ function makePipelines(){
   pipes.gauss=device.createRenderPipeline({layout:auto,
     vertex:{module:gaussMod,entryPoint:'vs',constants:{tw:TW,th:THH}},
     fragment:{module:gaussMod,entryPoint:'fs',targets:[{format:'r16float'}],
-      constants:{tw:TW,th:THH,filterSize:9}},
+      constants:{tw:TW,th:THH,filterSize:IS_TOUCH?9:13}},
     primitive:{topology:'triangle-list'}});
 
   const fluidMod=mod(FLUID_WGSL);
@@ -957,7 +958,9 @@ function resize(){
   const px=w*h;
   if(px>pixCap){const s=Math.sqrt(pixCap/px);w=Math.floor(w*s);h=Math.floor(h*s)}
   if(w===CW&&h===CH)return;
-  CW=w;CH=h;TW=w>>1;THH=h>>1;
+  /* thickness : pleine résolution sur PC (bords nets), demi-résolution en tactile */
+  const HS=IS_TOUCH?1:0;
+  CW=w;CH=h;TW=w>>HS;THH=h>>HS;
   cv.width=CW;cv.height=CH;
   ctx.configure({device,format:presFormat,alphaMode:'opaque'});
   const T=(f,W,H)=>device.createTexture({size:[W,H],format:f,
