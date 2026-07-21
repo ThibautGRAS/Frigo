@@ -436,7 +436,7 @@ background:rgba(255,255,255,.82);border-radius:100px;box-shadow:0 4px 16px rgba(
 <script>
 /* Garde-fous : jamais d'écran noir muet */
 window.__bootOK=false;
-window.__APP_VERSION="v2.5";
+window.__APP_VERSION="v2.6";
 window.addEventListener("DOMContentLoaded",function(){
   var v=document.getElementById("loaderVer");
   if(v)v.textContent=window.__APP_VERSION;
@@ -662,7 +662,9 @@ const scene=new THREE.Scene();
 scene.fog=new THREE.FogExp2(0xDDE8F4,0.011);
 const camera=new THREE.PerspectiveCamera(26,1,0.1,120);
 let camDist=17,camY=0.15;
-const camTgt={x:0,y:0,z:0};
+const CTY=0.5;                  /* cible caméra rehaussée : le cube s'affiche plus bas,
+                                   les noms d'axes au-dessus restent bien dégagés */
+const camTgt={x:0,y:CTY,z:0};
 let panelShift=0;               /* décalage horizontal scène quand panneau ouvert (PC) */
 const CAM={min:10,max:30,home:17};
 
@@ -980,7 +982,7 @@ let frame;
   frame.visible=false;     /* pas de cadre autour de la forme générale */
   root.add(frame);
 }
-const OUT=2.6;
+const OUT=3.4;                  /* tranche extraite plus loin du monolithe : moins fouillis */
 function cellLocal(a,l){return new THREE.Vector3((a-(NX-1)/2)*S,((NY-1)/2-l)*S,0);}
 function domZ(t){return ((NZ-1)/2-t)*S;}
 function makeInfoTexture(cell){
@@ -1082,7 +1084,7 @@ DOMAINS.forEach((d,di)=>{
   /* Étiquettes A/L de la tranche (fondu géré dans la boucle) */
   const lg=new THREE.Group();lg.visible=false;g.add(lg);g.userData.labels=lg;
   function lab(id,name,color,size){
-    const f1=60,f2=32,pad=22,gap=8;
+    const f1=60,f2=28,pad=22,gap=8;
     const c0=document.createElement("canvas").getContext("2d");
     c0.font=`800 ${f1}px 'Montserrat', Arial`;const w1=c0.measureText(id).width;
     c0.font=`600 ${f2}px 'Montserrat', Arial`;const w2=name?c0.measureText(name).width:0;
@@ -1097,13 +1099,13 @@ DOMAINS.forEach((d,di)=>{
     sp.scale.set(size*cv.width/cv.height,size,1);lg.add(sp);return sp;
   }
   AXES.forEach((a,ai)=>{
-    /* quinconce : le rang du milieu (A2) est remonté pour que les noms ne se chevauchent pas */
-    const yUp=(NY-1)/2*S+0.95+(ai===1?0.62:0);
+    /* quinconce accentué : les intitulés complets ne se chevauchent plus */
+    const yUp=(NY-1)/2*S+1.05+(ai===1?0.88:0);
     /* mêmes intitulés que sur le cube fermé (SOURCES & TRANSFERTS, etc.) */
-    const sp=lab(a.id,SHORT[a.id]||a.name,"#D42233",.35);
+    const sp=lab(a.id,SHORT[a.id]||a.name,"#D42233",.29);
     sp.position.set(cellLocal(ai,0).x,yUp,0.4);sp.userData={type:"axe",index:ai};
   });
-  LEVIERS.forEach((l,li)=>{const sp=lab(l.id,SHORT[l.id],"#123A7E",.35);
+  LEVIERS.forEach((l,li)=>{const sp=lab(l.id,SHORT[l.id],"#123A7E",.29);
     sp.position.set(-((NX-1)/2*S+1.55),cellLocal(0,li).y,0.4);sp.userData={type:"levier",index:li};});
 });
 
@@ -1288,13 +1290,13 @@ function openSlice(di,cb){
   /* recadrage doux + la tranche vient TOUJOURS au même endroit devant ;
      le cube restant se referme derrière (pas de trou) */
   tw(root.rotation,{x:0.16,y:-0.22},1000,easeIO);
-  tw(camTgt,{x:-0.85,y:0,z:0.6},1000,easeIO);
+  tw(camTgt,{x:-0.85,y:CTY,z:0.6},1000,easeIO);
   /* trajet allongé : le glissement de la tranche se lit bien, et son accélération
      fait ballotter le liquide (cf. boucle) */
   tw(g.userData.anim,{z:(NZ-1)/2*S+OUT,ry:-0.06},1250,easeIO,cb);
   const rest=domainGroups.filter((_,i)=>i!==di);
   rest.forEach((og,j)=>{
-    const zz=((rest.length-1)/2-j)*S-0.55;
+    const zz=((rest.length-1)/2-j)*S-1.35;    /* résidu repoussé derrière */
     tw(og.userData.anim,{z:zz,ry:0},1250,easeIO);
   });
   if(camera.aspect<1)tw(camObj,{d:Math.min(CAM.max,CAM.home+3.5)},900,easeIO);
@@ -1322,7 +1324,7 @@ function closeSliceNow(){
     tw(g.userData.anim,{z:domZ(di),ry:0},1000,easeIO);
     domainGroups.forEach((og,i)=>{if(i!==di)tw(og.userData.anim,{z:domZ(i),ry:0},1000,easeIO);});
     if(camera.aspect<1)tw(camObj,{d:CAM.home},750,easeIO);
-    tw(camTgt,{x:0,y:0,z:0},750,easeIO);
+    tw(camTgt,{x:0,y:CTY,z:0},750,easeIO);
   },460);
 }
 document.getElementById("dpClose").addEventListener("click",closeSliceNow);
