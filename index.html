@@ -445,7 +445,7 @@ background:rgba(255,255,255,.82);border-radius:100px;box-shadow:0 4px 16px rgba(
 <div class="hud liqpanel" id="liqPanel">
   <div class="lp-t sg">Liquide</div>
   <div class="lp-row"><span class="lp-l sg">Viscosité</span>
-    <input type="range" id="viscSlider" min="20" max="300" value="100" aria-label="Viscosité du liquide"></div>
+    <input type="range" id="viscSlider" min="20" max="300" value="300" aria-label="Viscosité du liquide"></div>
   <div class="lp-row"><span class="lp-l sg">Ballottement</span>
     <button class="lp-tg on sg" id="tgH" title="Réagir à la rotation horizontale">Horiz.</button>
     <button class="lp-tg on sg" id="tgV" title="Réagir à la rotation verticale">Vert.</button></div>
@@ -466,7 +466,7 @@ background:rgba(255,255,255,.82);border-radius:100px;box-shadow:0 4px 16px rgba(
 <script>
 /* Garde-fous : jamais d'écran noir muet */
 window.__bootOK=false;
-window.__APP_VERSION="v2.2";
+window.__APP_VERSION="v2.3";
 window.addEventListener("DOMContentLoaded",function(){
   var v=document.getElementById("loaderVer");
   if(v)v.textContent=window.__APP_VERSION;
@@ -945,7 +945,7 @@ const LIQ={
      uSun:{value:new THREE.Vector3(7,16,9).normalize()}}
 };
 /* réglages testables : multiplicateur de viscosité + axes de rotation écoutés */
-const LIQCFG={visc:1,h:true,v:true};
+const LIQCFG={visc:3,h:true,v:true};   /* défaut : viscosité max (choix utilisateur), H+V actifs */
 const LIQ_CB=BOX*.78;
 const liqGeo=new THREE.BoxGeometry(LIQ_CB,LIQ_CB,LIQ_CB);
 const liqVS=`
@@ -1095,7 +1095,7 @@ DOMAINS.forEach((d,di)=>{
          rouges (sujets chauds, vivants) très peu amortis, bleus plus posés */
       m.userData.liq={mesh:lqMesh,mat:lqMat,lvl:.28+Math.random()*.46,fill:0,agit:0,
         wob:lqMat.uniforms.uWob.value,wv:new THREE.Vector2(0,0),
-        k:23+Math.random()*10,
+        k:23+Math.random()*10,red:ess,pulseT:0,
         dp:ess?(.55+Math.random()*.38):(1.0+Math.random()*.5)};
       m.userData.phase=Math.random()*Math.PI*2;
       m.userData.phase2=Math.random()*Math.PI*2;
@@ -1341,13 +1341,18 @@ function openSlice(di,cb){
 function closeSliceNow(){
   const di=openDom;if(di<0)return;
   closeCard();
-  const g=domainGroups[di];
-  tw(g.userData.anim,{z:domZ(di),ry:0},1000,easeIO);
-  domainGroups.forEach((og,i)=>{if(i!==di)tw(og.userData.anim,{z:domZ(i),ry:0},1000,easeIO);});
-  if(camera.aspect<1)tw(camObj,{d:CAM.home},750,easeIO);
-  tw(camTgt,{x:0,y:0,z:0},750,easeIO);
+  /* séquence : 1) les cubes se vident et redeviennent bleus… */
   openDom=-1;domPill.classList.remove("show");hint.style.opacity=1;
   syncRail();setTargets();
+  /* …2) puis, une fois vidés, la tranche se range */
+  setTimeout(()=>{
+    if(openDom!==-1)return;                 /* réouvert entre-temps : openSlice gère */
+    const g=domainGroups[di];
+    tw(g.userData.anim,{z:domZ(di),ry:0},1000,easeIO);
+    domainGroups.forEach((og,i)=>{if(i!==di)tw(og.userData.anim,{z:domZ(i),ry:0},1000,easeIO);});
+    if(camera.aspect<1)tw(camObj,{d:CAM.home},750,easeIO);
+    tw(camTgt,{x:0,y:0,z:0},750,easeIO);
+  },460);
 }
 document.getElementById("dpClose").addEventListener("click",closeSliceNow);
 
@@ -1837,11 +1842,15 @@ function animate(){
       m.userData.edges.material.color.lerp(m.userData._ecol,dt);
     }
     if(m.userData.info)m.userData.info.material.opacity+=((T.info||0)-m.userData.info.material.opacity)*dt;
+    /* la lueur interne reflète la lumière du liquide quand le cube en contient */
+    const LQ=m.userData.liq,lqOn=!!(LQ&&LQ.fill>.06);
     if(m.userData.glow){
-      m.userData.glow.material.opacity+=((T.glow*life)-m.userData.glow.material.opacity)*dt;
+      const gTgt=T.glow*life+(lqOn?LQ.fill*.14+LQ.agit*.30:0);
+      m.userData.glow.material.opacity+=(gTgt-m.userData.glow.material.opacity)*dt;
       m.userData._gcol=m.userData._gcol||new THREE.Color();
       /* cœur bleu par défaut ; ne devient rouge que si la brique est rouge (tranche ouverte) */
       m.userData._gcol.copy(GLOW_N).lerp(GLOW_S,T.red);
+      if(lqOn)m.userData._gcol.lerp(LQ.mat.uniforms.uColor.value,Math.min(.8,LQ.fill));
       m.userData.glow.material.color.lerp(m.userData._gcol,dt);
     }
     if(m.userData.glow2){
@@ -1850,13 +1859,15 @@ function animate(){
       m.userData.glow2.material.opacity+=((T.glow*0.55*life2)-m.userData.glow2.material.opacity)*dt;
       m.userData._gcol2=m.userData._gcol2||new THREE.Color();
       m.userData._gcol2.copy(GLOW_N).lerp(GLOW_S,T.red);
+      if(lqOn)m.userData._gcol2.lerp(LQ.mat.uniforms.uColor.value,Math.min(.75,LQ.fill));
       m.userData.glow2.material.color.lerp(m.userData._gcol2,dt);
     }
     /* remplissage du liquide : se verse à l'ouverture du domaine, se vide sinon */
     if(pr&&m.userData.liq){
       const L=m.userData.liq;
       const tFill=(openDom===m.userData.di)?L.lvl:0;
-      L.fill+=(tFill-L.fill)*dt*.55;
+      /* vidange nettement plus rapide que le remplissage (fermeture lisible) */
+      L.fill+=(tFill-L.fill)*dt*(tFill>0?.55:1.8);
       const on=L.fill>.012;
       L.mesh.visible=on;
       if(on){
@@ -1873,6 +1884,12 @@ function animate(){
         /* agitation splash : souris rapide ou arrivée de tranche, retombée ~1 s */
         const at=Math.max(LIQ.agitT,Math.min(1,Math.abs(ga)*.02));
         L.agit=Math.max(L.agit*Math.exp(-1.9*dtS),at);
+        /* cubes rouges : micro-splash spontané de temps à autre (sujets vivants) */
+        if(L.red&&L.fill>L.lvl*.7&&tm>L.pulseT){
+          L.pulseT=tm+3.5+Math.random()*5.5;
+          L.agit=Math.max(L.agit,.30+Math.random()*.20);
+          L.wv.x+=(Math.random()-.5)*.55;L.wv.y+=(Math.random()-.5)*.55;
+        }
         L.mat.uniforms.uAgit.value=L.agit;
         L.mat.uniforms.uFill.value=L.fill;
         L.mesh.getWorldPosition(L.mat.uniforms.uCenter.value);
