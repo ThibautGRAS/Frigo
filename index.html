@@ -436,7 +436,7 @@ background:rgba(255,255,255,.82);border-radius:100px;box-shadow:0 4px 16px rgba(
 <script>
 /* Garde-fous : jamais d'écran noir muet */
 window.__bootOK=false;
-window.__APP_VERSION="v2.8";
+window.__APP_VERSION="v2.9";
 window.addEventListener("DOMContentLoaded",function(){
   var v=document.getElementById("loaderVer");
   if(v)v.textContent=window.__APP_VERSION;
@@ -1188,7 +1188,7 @@ function setTargets(){
     const{cell,di,ai,li,present}=m.userData;const t=m.userData.tgt;
     const ess=present&&cell.essential;
     /* état de repos */
-    let op=present?.92:.035, em=present?.28:.06, sc=1, ed=present?.8:.06, red=0, info=0, glow=present?.22:0;
+    let op=present?.92:.035, em=present?.28:.06, sc=1, ed=present?.8:.06, red=0, info=0, glow=present?.22:0, dense=0;
     const metaOn=metaKey&&((metaKey.type==="axe"&&ai===metaKey.index)||(metaKey.type==="levier"&&li===metaKey.index)||(metaKey.type==="domaine"&&di===metaKey.index));
     if(metaKey&&metaKey.dom==null){                    /* fiche axe/levier/domaine — cube fermé */
       /* tous les cubes associés passent en rouge (mise en avant), pas que les essentielles */
@@ -1206,8 +1206,9 @@ function setTargets(){
           }else if(cardKey){
             const isSel=m.userData.key===cardKey;
             const isLinked=CELLS[cardKey].links.includes(m.userData.key);
-            if(isSel){op=.98;em=.7;sc=1.12;ed=1;red=ess?1:.25;info=1;glow=.7;}
-            else if(isLinked){op=.72;em=.5;ed=1;red=ess?.5:.12;glow=.35;}
+            /* sélection : dense et frans dans SA couleur (rouge si essentielle, bleu sinon) */
+            if(isSel){op=.98;em=.7;sc=1.12;ed=1;red=ess?1:0;dense=1;info=1;glow=.7;}
+            else if(isLinked){op=.72;em=.5;ed=1;red=ess?.5:0;glow=.35;}
             else{op=.16;em=.35;ed=.32;info=.35;red*=0.3;glow*=0.15;}
           }
         }
@@ -1216,7 +1217,7 @@ function setTargets(){
         if(present&&cardKey&&CELLS[cardKey].links.includes(m.userData.key)){op=.6;em=.5;ed=.95;red=ess?.5:.15;glow=.35;}
       }
     }
-    t.opacity=op;t.emissiveI=em;t.scale=sc;t.edge=ed;t.red=red;t.info=info||0;t.glow=glow||0;
+    t.opacity=op;t.emissiveI=em;t.scale=sc;t.edge=ed;t.red=red;t.info=info||0;t.glow=glow||0;t.dense=dense;
     THA.fx(t,present,ess);
   });
   selLight.userData.to=cardKey?1.1:0;
@@ -1766,7 +1767,8 @@ function animate(){
        pour laisser voir le liquide, la couleur vient de lui */
     if(pr&&THA.tr&&!PERF.degraded){
       const inOp=openDom>=0&&m.userData.di===openDom;
-      const trT=Math.max(.05,THA.tr*(1-T.red*(inOp?.25:.85)));
+      /* dense : cube sélectionné opacifié dans sa couleur, rouge ou bleu */
+      const trT=Math.max(.05,THA.tr*(1-Math.max(T.red*(inOp?.25:.85),(T.dense||0)*.82)));
       mat.transmission+=(trT-mat.transmission)*dt;
     }
     if(PERF.degraded&&pr&&openDom===m.userData.di&&m.userData.liq&&m.userData.liq.fill>.05)
