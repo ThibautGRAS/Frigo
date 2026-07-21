@@ -55,7 +55,7 @@ body.dark #fb .card{background:rgba(6,18,44,.92);border-color:rgba(60,130,255,.2
 /* ═════════════════════════ Paramètres ═════════════════════════ */
 const url=new URLSearchParams(location.search);
 const IS_TOUCH=matchMedia('(pointer:coarse)').matches;
-const G=Math.max(24,Math.min(64,parseInt(url.get('g'))||(IS_TOUCH?38:48))); // grille G³
+const G=Math.max(24,Math.min(64,parseInt(url.get('g'))||(IS_TOUCH?40:52))); // grille G³
 const CUBE_W=3.0;                          // taille monde du cube visible
 const INNER_RATIO=.86;                     // cavité : le liquide vit dans 86 % du cube
 const INNER_W=CUBE_W*INNER_RATIO;          // → épaisseur de verre visible sur les parois

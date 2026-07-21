@@ -97,8 +97,8 @@ button{font-family:inherit;color:inherit}
 }
 .rail::-webkit-scrollbar{display:none}
 .rail .rlabel{
-  font-family:'Montserrat';font-weight:700;font-size:9.5px;letter-spacing:2.5px;
-  text-transform:uppercase;color:var(--red);margin:0 0 8px 14px;opacity:.8;
+  font-family:'Montserrat';font-weight:700;font-size:12.5px;letter-spacing:2.6px;
+  text-transform:uppercase;color:var(--red);margin:0 0 10px 14px;opacity:.85;
 }
 .dbtn{
   display:flex;align-items:center;gap:11px;padding:12px 17px;cursor:pointer;
@@ -146,28 +146,6 @@ button{font-family:inherit;color:inherit}
   .dbtn.on{transform:none;background:#fff;border-color:rgba(239,51,70,.4);box-shadow:0 4px 18px rgba(239,51,70,.18)}
   .dbtn.on .dn{color:var(--ink)}
 }
-
-/* ---------- Panneau liquide (tests) ---------- */
-.liqpanel{
-  right:16px;bottom:max(16px, env(safe-area-inset-bottom));
-  background:rgba(255,255,255,.72);border:1px solid rgba(11,31,78,.12);
-  border-radius:14px;padding:10px 14px 12px;min-width:196px;
-  box-shadow:0 8px 26px rgba(11,31,78,.12);
-}
-.liqpanel .lp-t{font-family:'Montserrat';font-weight:700;font-size:9px;letter-spacing:2.2px;
-  text-transform:uppercase;color:var(--red);opacity:.85;margin-bottom:7px}
-.liqpanel .lp-row{display:flex;align-items:center;gap:8px;margin-top:6px}
-.liqpanel .lp-l{font-family:'Montserrat';font-weight:600;font-size:10.5px;color:var(--ink-dim);
-  width:70px;flex-shrink:0}
-.liqpanel input[type=range]{flex:1;accent-color:var(--red);height:3px;cursor:pointer}
-.lp-tg{
-  font-family:'Montserrat';font-weight:700;font-size:10px;letter-spacing:.4px;
-  padding:5px 10px;border-radius:100px;cursor:pointer;
-  border:1px solid rgba(11,31,78,.16);background:rgba(255,255,255,.4);color:var(--ink-faint);
-  transition:background .2s,color .2s,border-color .2s;
-}
-.lp-tg.on{background:var(--navy);border-color:var(--navy);color:#fff}
-@media(max-width:760px){.liqpanel{bottom:76px;right:10px;min-width:174px}}
 
 /* ---------- Aide discrète ---------- */
 .hint{
@@ -442,14 +420,6 @@ background:rgba(255,255,255,.82);border-radius:100px;box-shadow:0 4px 16px rgba(
   <button class="dom-close" id="dpClose" aria-label="Fermer">✕</button>
 </div>
 
-<div class="hud liqpanel" id="liqPanel">
-  <div class="lp-t sg">Liquide</div>
-  <div class="lp-row"><span class="lp-l sg">Viscosité</span>
-    <input type="range" id="viscSlider" min="20" max="300" value="300" aria-label="Viscosité du liquide"></div>
-  <div class="lp-row"><span class="lp-l sg">Ballottement</span>
-    <button class="lp-tg on sg" id="tgH" title="Réagir à la rotation horizontale">Horiz.</button>
-    <button class="lp-tg on sg" id="tgV" title="Réagir à la rotation verticale">Vert.</button></div>
-</div>
 
 <aside class="hud cardp" id="card">
   <div class="chead">
@@ -466,7 +436,7 @@ background:rgba(255,255,255,.82);border-radius:100px;box-shadow:0 4px 16px rgba(
 <script>
 /* Garde-fous : jamais d'écran noir muet */
 window.__bootOK=false;
-window.__APP_VERSION="v2.3";
+window.__APP_VERSION="v2.4";
 window.addEventListener("DOMContentLoaded",function(){
   var v=document.getElementById("loaderVer");
   if(v)v.textContent=window.__APP_VERSION;
@@ -1112,7 +1082,7 @@ DOMAINS.forEach((d,di)=>{
   /* Étiquettes A/L de la tranche (fondu géré dans la boucle) */
   const lg=new THREE.Group();lg.visible=false;g.add(lg);g.userData.labels=lg;
   function lab(id,name,color,size){
-    const f1=60,f2=24,pad=22,gap=8;
+    const f1=60,f2=32,pad=22,gap=8;
     const c0=document.createElement("canvas").getContext("2d");
     c0.font=`800 ${f1}px 'Montserrat', Arial`;const w1=c0.measureText(id).width;
     c0.font=`600 ${f2}px 'Montserrat', Arial`;const w2=name?c0.measureText(name).width:0;
@@ -1141,7 +1111,7 @@ DOMAINS.forEach((d,di)=>{
 const axisLabels=[];
 function makeAxisLabel(id,name,color){
   const cv=document.createElement("canvas");
-  const f1=68,f2=30,pad=26,gap=10;
+  const f1=68,f2=40,pad=26,gap=10;
   const m=cv.getContext("2d");
   m.font=`800 ${f1}px 'Montserrat', Arial`;
   const w1=m.measureText(id).width;
@@ -1268,6 +1238,7 @@ const dotTex=(function(){
 })();
 function buildLinks(){
   clearLinks();
+  return;   /* liens animés entre cubes désactivés (choix utilisateur) */
   if(!cardKey)return;
   const src=cellMeshes.find(m=>m.userData.key===cardKey);
   CELLS[cardKey].links.forEach(k=>{
@@ -1506,12 +1477,6 @@ function syncRail(){
   document.querySelectorAll(".dbtn.dom").forEach((b,i)=>b.classList.toggle("on",i===openDom));
 }
 
-/* ---- Panneau liquide : viscosité globale + axes de ballottement ---- */
-document.getElementById("viscSlider").addEventListener("input",e=>{LIQCFG.visc=e.target.value/100;});
-[["tgH","h"],["tgV","v"]].forEach(([id,key])=>{
-  const b=document.getElementById(id);
-  b.addEventListener("click",()=>{LIQCFG[key]=!LIQCFG[key];b.classList.toggle("on",LIQCFG[key]);});
-});
 
 /* ════════════════════ AIDE & ACCUEIL ════════════════════ */
 const helpov=document.getElementById("helpov");
@@ -1884,11 +1849,15 @@ function animate(){
         /* agitation splash : souris rapide ou arrivée de tranche, retombée ~1 s */
         const at=Math.max(LIQ.agitT,Math.min(1,Math.abs(ga)*.02));
         L.agit=Math.max(L.agit*Math.exp(-1.9*dtS),at);
-        /* cubes rouges : micro-splash spontané de temps à autre (sujets vivants) */
-        if(L.red&&L.fill>L.lvl*.7&&tm>L.pulseT){
-          L.pulseT=tm+3.5+Math.random()*5.5;
-          L.agit=Math.max(L.agit,.30+Math.random()*.20);
-          L.wv.x+=(Math.random()-.5)*.55;L.wv.y+=(Math.random()-.5)*.55;
+        /* cubes rouges : micro-splash spontané, désynchronisé (premier tirage aléatoire
+           au remplissage, jamais tous en même temps), et bien visible */
+        if(L.red&&L.fill>L.lvl*.7){
+          if(L.pulseT===0)L.pulseT=tm+.8+Math.random()*6.5;
+          else if(tm>L.pulseT){
+            L.pulseT=tm+3.5+Math.random()*6;
+            L.agit=Math.max(L.agit,.48+Math.random()*.28);
+            L.wv.x+=(Math.random()-.5)*.9;L.wv.y+=(Math.random()-.5)*.9;
+          }
         }
         L.mat.uniforms.uAgit.value=L.agit;
         L.mat.uniforms.uFill.value=L.fill;
