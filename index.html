@@ -147,6 +147,28 @@ button{font-family:inherit;color:inherit}
   .dbtn.on .dn{color:var(--ink)}
 }
 
+/* ---------- Panneau liquide (tests) ---------- */
+.liqpanel{
+  right:16px;bottom:max(16px, env(safe-area-inset-bottom));
+  background:rgba(255,255,255,.72);border:1px solid rgba(11,31,78,.12);
+  border-radius:14px;padding:10px 14px 12px;min-width:196px;
+  box-shadow:0 8px 26px rgba(11,31,78,.12);
+}
+.liqpanel .lp-t{font-family:'Montserrat';font-weight:700;font-size:9px;letter-spacing:2.2px;
+  text-transform:uppercase;color:var(--red);opacity:.85;margin-bottom:7px}
+.liqpanel .lp-row{display:flex;align-items:center;gap:8px;margin-top:6px}
+.liqpanel .lp-l{font-family:'Montserrat';font-weight:600;font-size:10.5px;color:var(--ink-dim);
+  width:70px;flex-shrink:0}
+.liqpanel input[type=range]{flex:1;accent-color:var(--red);height:3px;cursor:pointer}
+.lp-tg{
+  font-family:'Montserrat';font-weight:700;font-size:10px;letter-spacing:.4px;
+  padding:5px 10px;border-radius:100px;cursor:pointer;
+  border:1px solid rgba(11,31,78,.16);background:rgba(255,255,255,.4);color:var(--ink-faint);
+  transition:background .2s,color .2s,border-color .2s;
+}
+.lp-tg.on{background:var(--navy);border-color:var(--navy);color:#fff}
+@media(max-width:760px){.liqpanel{bottom:76px;right:10px;min-width:174px}}
+
 /* ---------- Aide discrète ---------- */
 .hint{
   bottom:max(16px, env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);
@@ -420,6 +442,15 @@ background:rgba(255,255,255,.82);border-radius:100px;box-shadow:0 4px 16px rgba(
   <button class="dom-close" id="dpClose" aria-label="Fermer">✕</button>
 </div>
 
+<div class="hud liqpanel" id="liqPanel">
+  <div class="lp-t sg">Liquide</div>
+  <div class="lp-row"><span class="lp-l sg">Viscosité</span>
+    <input type="range" id="viscSlider" min="20" max="300" value="100" aria-label="Viscosité du liquide"></div>
+  <div class="lp-row"><span class="lp-l sg">Ballottement</span>
+    <button class="lp-tg on sg" id="tgH" title="Réagir à la rotation horizontale">Horiz.</button>
+    <button class="lp-tg on sg" id="tgV" title="Réagir à la rotation verticale">Vert.</button></div>
+</div>
+
 <aside class="hud cardp" id="card">
   <div class="chead">
     <div class="cgrab"></div>
@@ -435,7 +466,7 @@ background:rgba(255,255,255,.82);border-radius:100px;box-shadow:0 4px 16px rgba(
 <script>
 /* Garde-fous : jamais d'écran noir muet */
 window.__bootOK=false;
-window.__APP_VERSION="v2.1";
+window.__APP_VERSION="v2.2";
 window.addEventListener("DOMContentLoaded",function(){
   var v=document.getElementById("loaderVer");
   if(v)v.textContent=window.__APP_VERSION;
@@ -913,6 +944,8 @@ const LIQ={
   U:{uTime:{value:0},uHalfY:{value:1},
      uSun:{value:new THREE.Vector3(7,16,9).normalize()}}
 };
+/* réglages testables : multiplicateur de viscosité + axes de rotation écoutés */
+const LIQCFG={visc:1,h:true,v:true};
 const LIQ_CB=BOX*.78;
 const liqGeo=new THREE.BoxGeometry(LIQ_CB,LIQ_CB,LIQ_CB);
 const liqVS=`
@@ -1058,11 +1091,12 @@ DOMAINS.forEach((d,di)=>{
       lqMesh.visible=false;
       m.add(lqMesh);
       /* ressort propre à chaque glaçon : raideur/amortissement légèrement différents
-         → les liquides ne ballottent pas à l'unisson (moins mécanique), et un peu
-         moins visqueux qu'avant (ça oscille plus longtemps) */
+         → les liquides ne ballottent pas à l'unisson. Viscosité par couleur :
+         rouges (sujets chauds, vivants) très peu amortis, bleus plus posés */
       m.userData.liq={mesh:lqMesh,mat:lqMat,lvl:.28+Math.random()*.46,fill:0,agit:0,
         wob:lqMat.uniforms.uWob.value,wv:new THREE.Vector2(0,0),
-        k:23+Math.random()*10,dp:1.15+Math.random()*.75};
+        k:23+Math.random()*10,
+        dp:ess?(.55+Math.random()*.38):(1.0+Math.random()*.5)};
       m.userData.phase=Math.random()*Math.PI*2;
       m.userData.phase2=Math.random()*Math.PI*2;
     }
@@ -1467,6 +1501,13 @@ function syncRail(){
   document.querySelectorAll(".dbtn.dom").forEach((b,i)=>b.classList.toggle("on",i===openDom));
 }
 
+/* ---- Panneau liquide : viscosité globale + axes de ballottement ---- */
+document.getElementById("viscSlider").addEventListener("input",e=>{LIQCFG.visc=e.target.value/100;});
+[["tgH","h"],["tgV","v"]].forEach(([id,key])=>{
+  const b=document.getElementById(id);
+  b.addEventListener("click",()=>{LIQCFG[key]=!LIQCFG[key];b.classList.toggle("on",LIQCFG[key]);});
+});
+
 /* ════════════════════ AIDE & ACCUEIL ════════════════════ */
 const helpov=document.getElementById("helpov");
 document.getElementById("helpBtn").addEventListener("click",()=>helpov.classList.add("show"));
@@ -1716,10 +1757,12 @@ function animate(){
         ensuite par le ressort propre de chaque cube ── */
   {
     LIQ.dtS=Math.max(.001,Math.min(dtMs,50)/1000);
-    LIQ.dX=THREE.MathUtils.clamp(-rotV.vx*9,-.5,.5);     /* yaw   → slosh latéral */
-    LIQ.dZ=THREE.MathUtils.clamp( rotV.vy*9,-.5,.5);     /* pitch → slosh avant/arrière */
+    /* axes écoutés selon les interrupteurs H / V du panneau */
+    LIQ.dX=LIQCFG.h?THREE.MathUtils.clamp(-rotV.vx*9,-.5,.5):0;  /* yaw   → slosh latéral */
+    LIQ.dZ=LIQCFG.v?THREE.MathUtils.clamp( rotV.vy*9,-.5,.5):0;  /* pitch → slosh avant/arrière */
     /* splash : au-delà d'une vitesse de souris, le liquide s'agite (clapot + écume) */
-    LIQ.agitT=THREE.MathUtils.clamp((Math.abs(rotV.vx)+Math.abs(rotV.vy)-.030)*16,0,1);
+    const spd=(LIQCFG.h?Math.abs(rotV.vx):0)+(LIQCFG.v?Math.abs(rotV.vy):0);
+    LIQ.agitT=THREE.MathUtils.clamp((spd-.030)*16,0,1);
     LIQ.U.uTime.value=tm;
     const e=root.matrixWorld.elements;                   /* demi-hauteur monde de la cavité tournée */
     LIQ.U.uHalfY.value=(LIQ_CB/2)*(Math.abs(e[1])+Math.abs(e[5])+Math.abs(e[9]));
@@ -1824,7 +1867,7 @@ function animate(){
         const dvz=THREE.MathUtils.clamp(LIQ.dZ+LIQ.zz*ga,-.65,.65);
         L.wv.x+=(dvx-L.wob.x)*L.k*dtS;
         L.wv.y+=(dvz-L.wob.y)*L.k*dtS;
-        const dm=Math.exp(-L.dp*dtS);
+        const dm=Math.exp(-L.dp*LIQCFG.visc*dtS);
         L.wv.x*=dm;L.wv.y*=dm;
         L.wob.x+=L.wv.x*dtS;L.wob.y+=L.wv.y*dtS;
         /* agitation splash : souris rapide ou arrivée de tranche, retombée ~1 s */
