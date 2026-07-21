@@ -436,7 +436,7 @@ background:rgba(255,255,255,.82);border-radius:100px;box-shadow:0 4px 16px rgba(
 <script>
 /* Garde-fous : jamais d'écran noir muet */
 window.__bootOK=false;
-window.__APP_VERSION="v2.7";
+window.__APP_VERSION="v2.8";
 window.addEventListener("DOMContentLoaded",function(){
   var v=document.getElementById("loaderVer");
   if(v)v.textContent=window.__APP_VERSION;
@@ -1191,7 +1191,8 @@ function setTargets(){
     let op=present?.92:.035, em=present?.28:.06, sc=1, ed=present?.8:.06, red=0, info=0, glow=present?.22:0;
     const metaOn=metaKey&&((metaKey.type==="axe"&&ai===metaKey.index)||(metaKey.type==="levier"&&li===metaKey.index)||(metaKey.type==="domaine"&&di===metaKey.index));
     if(metaKey&&metaKey.dom==null){                    /* fiche axe/levier/domaine — cube fermé */
-      if(metaOn&&present){op=.82;em=.45;ed=1;sc=1.05;red=ess?.95:0;glow=ess?.45:.3;}
+      /* tous les cubes associés passent en rouge (mise en avant), pas que les essentielles */
+      if(metaOn&&present){op=.82;em=.45;ed=1;sc=1.05;red=.95;glow=.4;}
       else{op=present?.07:.04;em=.12;ed=.08;glow=0;}
     }else if(openDom>=0){
       if(di===openDom){
@@ -1200,7 +1201,7 @@ function setTargets(){
           op=ess?.97:.76;em=ess?.45:.35;ed=.95;info=1;
           red=ess?1:0;glow=ess?.55:.3;                 /* rouge CETIM franc, réservé aux essentielles */
           if(metaKey&&metaKey.dom===openDom){          /* fiche axe/levier contextuelle */
-            if(metaOn){op=.85;em=.55;ed=1;sc=1.06;}
+            if(metaOn){op=.85;em=.55;ed=1;sc=1.06;red=1;glow=.5;}
             else{op=.14;em=.3;ed=.25;info=.3;red*=0.4;glow*=0.2;}
           }else if(cardKey){
             const isSel=m.userData.key===cardKey;
@@ -1654,24 +1655,19 @@ function startPres(){
       pWait(3200,()=>stepLevier(i+1));
     });
   }
-  /* 3) chaque DOMAINE (fiche descriptive, comme un clic sur D1..D5) */
+  /* 3) chaque DOMAINE : vue déployée réelle (tranche extraite, liquides visibles) */
   function stepDomain(i){
     if(!presOn)return;
     if(i>=DOMAINS.length){
-      closeCard();
+      closeSliceNow();
       caption(`<span class="pc-red">●</span>3 axes × 4 leviers × 5 domaines`);
-      pWait(2600,()=>{stopPres();closeSliceNow();
+      pWait(2600,()=>{stopPres();
         tw(root.rotation,{x:HOME.x,y:HOME.y},1200,easeIO);});
       return;
     }
     caption(`<span class="pc-red">${DOMAINS[i].id}</span>${DOMAINS[i].name}`);
-    tw(root.rotation,{x:HOME.x+(i%2?0.07:-0.04),y:HOME.y+(i%2?0.18:-0.14)},1000,easeIO,()=>{
-      openDomInfo(i);
-      pWait(3400,()=>{
-        closeCard();
-        pWait(450,()=>stepDomain(i+1));
-      });
-    });
+    openSlice(i);                       /* extraction + fiche à droite + remplissage */
+    pWait(5400,()=>stepDomain(i+1));    /* le temps d'apprécier le slosh d'arrivée */
   }
 }
 function stopPres(){
