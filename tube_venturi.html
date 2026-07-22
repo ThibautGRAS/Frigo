@@ -89,6 +89,7 @@ body.dark #chart{background:rgba(0,40,120,.28);border-color:rgba(40,110,255,.30)
 <div id="ui">
   <div class="spd"><label>Vitesse</label><input type="range" id="vSlider" min="0" max="300" value="60"><b id="vVal">60</b></div>
   <div class="spd s2"><label>Particules</label><input type="range" id="pSlider" min="0" max="100" value="50"><b id="pVal">—</b></div>
+  <div class="spd s2"><label>p₁ amont</label><input type="range" id="qSlider" min="10" max="300" value="101"><b id="qVal">101 kPa</b></div>
   <button class="b" id="bF">🌊 Flux</button>
   <button class="b" id="bH">ℹ Aide</button>
   <button class="b" id="bG">⭘ Diaphragme</button>
@@ -132,7 +133,9 @@ body.dark #chart{background:rgba(0,40,120,.28);border-color:rgba(40,110,255,.30)
         c'est là que la cavitation s'amorce.</span></div>
       <div><i>Cavitation</i><code>σ = (p₁ − p_vap) / (½ρv²_réf)</code>
         <span>v_réf = v₂ (venturi) ou v𝑣𝑐 (diaphragme) ; amorçage vers σ ≲ 1 ;
-        p_vap(20 °C) = 2,34 kPa ; p₁ = 101,3 kPa supposée.</span></div>
+        p_vap(20 °C) = 2,34 kPa ; <b>p₁ réglable au slider</b> (10–300 kPa abs) :
+        baisser p₁ fait caviter à faible débit — c'est la logique du NPSH d'une
+        installation.</span></div>
       <div><i>Reynolds</i><code>Re = v·D/ν , ν = 10⁻⁶ m²/s</code></div>
     </div>
     <p><b>Mesure « sim »</b> : un kernel GPU moyenne la vitesse axiale des particules dans
@@ -1216,6 +1219,14 @@ pSlider.addEventListener('change',e=>{
   buildSim();makePipelines();makeBindgroups();
   pVal.textContent=(NP/1000).toFixed(0)+'k';
 });
+/* pression amont p₁ : condition d'installation (type NPSH) — pilote le calcul
+   analytique, le graphe et le déclenchement des bulles via σ */
+const qSlider=document.getElementById('qSlider'),qVal=document.getElementById('qVal');
+qSlider.addEventListener('input',e=>{
+  P1=+e.target.value;
+  qVal.textContent=P1+' kPa';
+  updCalc(+vSlider.value);
+});
 /* aide */
 const helpEl=document.getElementById('help');
 document.getElementById('bH').addEventListener('click',()=>helpEl.classList.add('show'));
@@ -1245,7 +1256,8 @@ document.getElementById('bT').addEventListener('click',()=>{
 const vSlider=document.getElementById('vSlider'),vVal=document.getElementById('vVal');
 const calcEl=document.getElementById('calc');
 const D1mm=50, beta=RT/R0, D2mm=D1mm*beta, Cc=0.62, Cd=0.97, RHO=1000,
-      NU=1e-6, P1=101.3, PVAP=2.34;                       // kPa (eau 20 °C)
+      NU=1e-6, PVAP=2.34;                                 // kPa (eau 20 °C)
+let P1=101.3;                                             // pression amont réglable (kPa abs)
 const CELL_M=(D1mm/1000)/(2*R0);                          // m par cellule
 const A1=Math.PI*Math.pow(D1mm/2000,2);                   // m²
 const MEAS={v1:0,v2:0,pending:false};
@@ -1370,6 +1382,7 @@ const setSpeed=v=>{FLOW=v/100;vVal.textContent=v;updCalc(v)};
 vSlider.addEventListener('input',e=>setSpeed(+e.target.value));
 if(MODE==='orifice')bG.textContent='⌛ Venturi';
 if(url.has('v'))vSlider.value=url.get('v');
+if(url.has('p1')){qSlider.value=url.get('p1');P1=+qSlider.value;qVal.textContent=P1+' kPa';}
 setSpeed(+vSlider.value);
 pVal.textContent=(NP/1000).toFixed(0)+'k';
 if(url.has('kick'))setInterval(()=>pulse=1,3000);
