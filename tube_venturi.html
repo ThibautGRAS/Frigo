@@ -69,7 +69,7 @@ body.dark .form span{color:#7E98C8}
 <canvas id="gpu"></canvas>
 <div id="i"></div>
 <div id="calc"></div>
-<canvas id="chart" width="264" height="118"></canvas>
+<canvas id="chart" width="330" height="158"></canvas>
 <style>
 #calc{position:fixed;top:calc(12px + env(safe-area-inset-top));left:14px;z-index:5;
   background:rgba(255,255,255,.78);border:1px solid rgba(11,31,78,.14);border-radius:14px;
@@ -81,8 +81,8 @@ body.dark #calc{background:rgba(0,40,120,.30);border-color:rgba(40,110,255,.30);
 body.dark #calc b{color:rgba(170,215,255,.96)}
 @media(max-width:600px){#calc{min-width:178px;font-size:9.5px;padding:10px 12px}}
 #chart{position:fixed;left:14px;bottom:calc(18px + env(safe-area-inset-bottom));z-index:5;
-  width:264px;height:118px;
-  background:rgba(255,255,255,.78);border:1px solid rgba(11,31,78,.14);border-radius:14px}
+  width:330px;height:158px;
+  background:rgba(255,255,255,.82);border:1px solid rgba(11,31,78,.14);border-radius:14px}
 body.dark #chart{background:rgba(0,40,120,.28);border-color:rgba(40,110,255,.30)}
 @media(max-width:900px){#chart{display:none}}
 </style>
@@ -419,8 +419,8 @@ fn hash01(n0:u32)->f32{
        comme le retour instantané d'un vrai circuit incompressible) */
     if(!recycle&&particles[id.x].position.x<XC-1.){
       let over=densities[id.x]/RESTD;
-      if(over>1.30){
-        let p=clamp((over-1.30)*.06,0.,.08);
+      if(over>1.22){
+        let p=clamp((over-1.22)*.09,0.,.12);
         recycle=hash01(id.x*911u+bitcast<u32>(particles[id.x].position.x))<p;
       }
     }
@@ -429,7 +429,7 @@ fn hash01(n0:u32)->f32{
       let u1=hash01(seed);let u2=hash01(seed+1013u);let u3=hash01(seed+2027u);
       let rr=(R0-2.2)*sqrt(u1);
       let an=6.2831853*u2;
-      particles[id.x].position=vec3f(X0+.8+u3*12.,CY+rr*cos(an),CZ+rr*sin(an));
+      particles[id.x].position=vec3f(X0+.8+u3*20.,CY+rr*cos(an),CZ+rr*sin(an));
       particles[id.x].v=vec3f(.6,0.,0.);
       particles[id.x].C=mat3x3f(vec3f(0.),vec3f(0.),vec3f(0.));
     }
@@ -868,10 +868,9 @@ function buildGlass(){
   device.queue.writeBuffer(glassVB,0,V);
 }
 buildGlass();
-/* anneaux lumineux : amont, col (vanne), aval (halo+cœur) + anneau-témoin
-   pointillé au diamètre théorique de la vena contracta (mode diaphragme) */
+/* anneaux lumineux : amont, col (vanne), aval — halo + cœur */
 const RING_XS=[X0+.6,XC,X1-1];
-const RSEG=24,EDGE_N=RSEG*(RING_XS.length*2+1);
+const RSEG=24,EDGE_N=RSEG*RING_XS.length*2;
 const edgeData=new Float32Array(EDGE_N*12);
 const edgeVB=device.createBuffer({size:edgeData.byteLength,usage:GPUBufferUsage.VERTEX|GPUBufferUsage.COPY_DST});
 const GLOW_N=2;
@@ -884,7 +883,7 @@ BUBref=BUB;
 const bubVB=device.createBuffer({size:BUB.data.byteLength,usage:GPUBufferUsage.VERTEX|GPUBufferUsage.COPY_DST});
 const CAV={sig:9,v1ms:0};                    /* alimenté par updCalc */
 function stepBubbles(){
-  const sev=Math.max(0,1.15-CAV.sig);        /* sévérité 0..~1 (σ<1.15 ⇒ bulles) */
+  const sev=Math.max(0,1.02-CAV.sig);        /* synchro : bulles dès σ ≲ 1, comme le ⚠ et le graphe */
   const vc=CAV.v1ms>0?CAV.v1ms/CELL_M/Math.max(fps,20):0;   /* cellules/frame conduite */
   if(sev>0&&vc>0){
     /* apparition GRADUELLE (cavitation naissante → développée) : taux quadratique
@@ -1157,18 +1156,6 @@ function applyPalette(){
       else put(A,B,dark?.010:.006,dark?.75:.55,core);
     }
   }
-  /* anneau-témoin vena contracta : D_vc = D₂·√Cc, ~½·D₂ en aval de la plaque,
-     pointillé rouge — permet de comparer le pincement simulé à la théorie */
-  {
-    const on=MODE==='orifice';
-    const rvc=RT*Math.sqrt(.62), xm=XC+PLATE+RT;
-    for(let s=0;s<RSEG;s++){
-      const a0=s/RSEG*Math.PI*2,a1=(s+1)/RSEG*Math.PI*2;
-      const A=gridToWorld([xm,CY+Math.cos(a0)*rvc,CZ+Math.sin(a0)*rvc]);
-      const B=gridToWorld([xm,CY+Math.cos(a1)*rvc,CZ+Math.sin(a1)*rvc]);
-      put(A,B,.012,(on&&s%2===0)?.6:0,[1,.30,.38]);
-    }
-  }
   device.queue.writeBuffer(edgeVB,0,edgeData);
 }
 function resize(){
@@ -1308,58 +1295,76 @@ function updCalc(v){
   CAV.sig=sig;CAV.v1ms=v1;                   /* pilote les bulles de cavitation */
   drawChart(v1);
 }
-/* ── Graphe p(x) / v(x) le long du profil (analytique, continuité+Bernoulli) ── */
+/* ── Graphe p(x) / v(x) le long du profil (analytique, continuité+Bernoulli).
+      En mode diaphragme, la vitesse effective au col intègre la vena contracta
+      (v/Cc) : le creux de pression est LE MÊME que celui du tableau et des
+      bulles 3D — cavitation synchronisée partout. ── */
 const chart=document.getElementById('chart'),chx=chart.getContext('2d');
 function drawChart(v1){
   const W=chart.width,H=chart.height,dark=THEME==='dark';
+  const ink=dark?'#BCD2F5':'#0B1F4E',dim=dark?'rgba(150,185,235,.5)':'rgba(11,31,78,.38)';
   chx.clearRect(0,0,W,H);
-  const N=110,pad=10,y0=14,h=H-y0-14;
-  let vmax=0,pmin=1e9,pmax=-1e9;
+  const N=140,padL=34,padR=10,y0=18,h=H-y0-26;
+  const orif=MODE==='orifice';
+  let vmax=0,pminRaw=1e9;
   const vs=[],ps=[];
   for(let i=0;i<=N;i++){
     const x=X0+(X1-X0)*i/N;
-    const vv=v1*Math.pow(R0/tubeR(x),2);
-    /* pression saturée à p_vap : en dessous, l'eau vaporise (cavitation) */
-    const pp=Math.max(P1+.5*RHO*(v1*v1-vv*vv)/1000,PVAP);
-    vs.push(vv);ps.push(pp);
-    vmax=Math.max(vmax,vv);pmin=Math.min(pmin,pp);pmax=Math.max(pmax,pp);
+    let vv=v1*Math.pow(R0/tubeR(x),2);
+    if(orif&&Math.abs(x-XC)<PLATE+1.4)vv/=Cc;      /* vena contracta au col */
+    const raw=P1+.5*RHO*(v1*v1-vv*vv)/1000;
+    pminRaw=Math.min(pminRaw,raw);
+    vs.push(vv);ps.push(Math.max(raw,PVAP));       /* saturé à p_vap (vaporisation) */
+    vmax=Math.max(vmax,vv);
   }
-  /* profil du tube en fond */
-  chx.fillStyle=dark?'rgba(90,140,220,.18)':'rgba(11,31,78,.08)';
+  const pmax=Math.max(P1*1.04,...ps);
+  const X=i=>padL+(W-padL-padR)*i/N;
+  const Yp=p=>y0+h*(1-p/pmax);
+  const cav=pminRaw<=PVAP+.01;
+  /* grille légère + profil du tube */
+  chx.strokeStyle=dim;chx.lineWidth=.6;
+  chx.beginPath();chx.moveTo(X(0),Yp(P1));chx.lineTo(X(N),Yp(P1));chx.stroke();
+  chx.beginPath();chx.moveTo(X(N/2),y0);chx.lineTo(X(N/2),y0+h);chx.stroke();
+  chx.fillStyle=dark?'rgba(90,140,220,.16)':'rgba(11,31,78,.07)';
   chx.beginPath();
-  for(let i=0;i<=N;i++){const x=X0+(X1-X0)*i/N;
-    chx.lineTo(pad+(W-2*pad)*i/N,H/2-(tubeR(x)/R0)*h*.30)}
-  for(let i=N;i>=0;i--){const x=X0+(X1-X0)*i/N;
-    chx.lineTo(pad+(W-2*pad)*i/N,H/2+(tubeR(x)/R0)*h*.30)}
+  for(let i=0;i<=N;i++)chx.lineTo(X(i),y0+h*.5-(tubeR(X0+(X1-X0)*i/N)/R0)*h*.26);
+  for(let i=N;i>=0;i--)chx.lineTo(X(i),y0+h*.5+(tubeR(X0+(X1-X0)*i/N)/R0)*h*.26);
   chx.fill();
-  const line=(arr,lo,hi,color)=>{
-    chx.strokeStyle=color;chx.lineWidth=1.6;chx.beginPath();
-    for(let i=0;i<=N;i++){
-      const t=hi>lo?(arr[i]-lo)/(hi-lo):.5;
-      chx.lineTo(pad+(W-2*pad)*i/N,y0+h*(1-t));
-    }chx.stroke()};
-  /* ligne de pression de vapeur : le creux doit clairement la toucher */
-  const yPv=y0+h*(1-(PVAP-0)/(pmax-0));
-  chx.strokeStyle='rgba(239,51,70,.55)';chx.lineWidth=1;chx.setLineDash([4,3]);
-  chx.beginPath();chx.moveTo(pad,yPv);chx.lineTo(W-pad,yPv);chx.stroke();
+  /* p_vap : pointillé rouge */
+  const yPv=Yp(PVAP);
+  chx.strokeStyle='rgba(239,51,70,.6)';chx.lineWidth=1;chx.setLineDash([4,3]);
+  chx.beginPath();chx.moveTo(X(0),yPv);chx.lineTo(X(N),yPv);chx.stroke();
   chx.setLineDash([]);
-  line(vs,0,vmax*1.05,'#EF3346');
-  line(ps,0,pmax,dark?'#7FB2FF':'#0B1F4E');
-  /* segment saturé à p_vap (poche de vapeur) souligné en rouge épais */
-  chx.strokeStyle='#EF3346';chx.lineWidth=3;chx.beginPath();
-  let inCav=false;
-  for(let i=0;i<=N;i++){
-    if(ps[i]<=PVAP+.01){
-      const px=pad+(W-2*pad)*i/N;
-      if(!inCav){chx.moveTo(px,yPv);inCav=true}else chx.lineTo(px,yPv);
-    }else inCav=false;
+  /* courbes : v (rouge, échelle propre) et p (navy, échelle kPa) */
+  chx.strokeStyle='#EF3346';chx.lineWidth=1.7;chx.beginPath();
+  for(let i=0;i<=N;i++)chx.lineTo(X(i),y0+h*(1-vs[i]/(vmax*1.06||1)));
+  chx.stroke();
+  chx.strokeStyle=dark?'#7FB2FF':'#0B1F4E';chx.beginPath();
+  for(let i=0;i<=N;i++)chx.lineTo(X(i),Yp(ps[i]));
+  chx.stroke();
+  /* poche de vapeur : segment saturé souligné */
+  if(cav){
+    chx.strokeStyle='#EF3346';chx.lineWidth=3.4;chx.beginPath();
+    let inC=false;
+    for(let i=0;i<=N;i++){
+      if(ps[i]<=PVAP+.01){if(!inC){chx.moveTo(X(i),yPv);inC=true}else chx.lineTo(X(i),yPv)}
+      else inC=false;
+    }
+    chx.stroke();
   }
-  chx.stroke();chx.lineWidth=1.6;
-  chx.font='700 8.5px monospace';
-  chx.fillStyle='#EF3346';chx.fillText('v(x)',pad+2,y0+7);
-  chx.fillStyle=dark?'#7FB2FF':'#0B1F4E';chx.fillText('p(x)',pad+30,y0+7);
-  chx.fillStyle='rgba(239,51,70,.8)';chx.fillText('p_vap',W-pad-34,yPv-3);
-  if(pmin<=PVAP+.01){chx.fillStyle='#EF3346';chx.fillText('⚠ cavitation',W-pad-76,y0+7)}
+  /* axes & annotations chiffrées */
+  chx.font='700 9px ui-monospace,monospace';
+  chx.fillStyle=ink;
+  chx.fillText(`p₁ ${P1.toFixed(0)}`,2,Yp(P1)+3);
+  chx.fillStyle='rgba(239,51,70,.85)';
+  chx.fillText(`p_vap ${PVAP.toFixed(1)}`,2,yPv+3);
+  chx.fillStyle='#EF3346';
+  chx.fillText(`v_max ${vmax.toFixed(1)} m/s`,padL+4,y0+9);
+  chx.fillStyle=dark?'#7FB2FF':'#0B1F4E';
+  chx.fillText(`p_min ${Math.max(pminRaw,PVAP).toFixed(1)} kPa`,padL+4,y0+h+16);
+  chx.fillStyle=ink;
+  chx.fillText(orif?'diaphragme (v_vc au col)':'venturi',W-padR-138,y0+h+16);
+  if(cav){chx.fillStyle='#EF3346';chx.fillText('⚠ CAVITATION',W-padR-92,y0+9)}
 }
 const setSpeed=v=>{FLOW=v/100;vVal.textContent=v;updCalc(v)};
 vSlider.addEventListener('input',e=>setSpeed(+e.target.value));
@@ -1479,7 +1484,7 @@ function frame(now){
     p.setPipeline(pipes.glassFront);p.setBindGroup(0,bgs.glassFront);
     p.setVertexBuffer(0,glassVB);p.setIndexBuffer(glassIB,'uint32');p.drawIndexed(glassIdxN);
     p.setPipeline(pipes.edgeOver);p.setBindGroup(0,bgs.edgeOver);
-    p.setVertexBuffer(0,edgeVB);p.draw(6,RSEG*4,0,RSEG*3);   /* cœurs + anneau D_vc */
+    p.setVertexBuffer(0,edgeVB);p.draw(6,RSEG*3,0,RSEG*3);   /* cœurs des anneaux */
     /* bulles re-dessinées par-dessus le fluide : nettement visibles */
     if(BUB.list.length){
       p.setPipeline(pipes.glowOver);p.setBindGroup(0,bgs.glowOver);
