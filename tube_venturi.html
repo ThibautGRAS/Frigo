@@ -189,7 +189,7 @@ const PALS=[
 const SUN_W=norm3([.45,.85,.42]);
 /* deux appareils : venturi lisse (convergent doux) ou diaphragme à arête vive
    (plaque mince) — seul le second crée une vraie vena contracta en aval */
-let MODE='venturi';
+let MODE=url.get('mode')==='orifice'?'orifice':'venturi';
 const PLATE=1.1;                                   // demi-épaisseur de la plaque (cellules)
 function tubeR(x){
   const d=Math.abs(x-XC);
@@ -425,10 +425,14 @@ fn hash01(n0:u32)->f32{
       clamp(particles[id.x].position.x,1.5,realBoxSize.x-2.),
       clamp(particles[id.x].position.y,1.,realBoxSize.y-2.),
       clamp(particles[id.x].position.z,1.,realBoxSize.z-2.));
-    /* ── paroi cylindrique R(x) : ressort SDF radial en (y,z), prédiction k=2 ── */
+    /* ── parois, prédiction k=2 ──
+       tube : ressort radial. Diaphragme : ressort AXIAL (une vraie plaque
+       repousse vers l'amont/aval, elle ne pousse pas vers l'axe — sinon le
+       fluide du bas, plus dense, ressort biaisé vers le haut) ── */
     let k=2.0; let wallStiffness=1.0;
     let xN:vec3f=particles[id.x].position+particles[id.x].v*dt*k;
-    let rad=tubeR(xN.x)-1.4;
+    var rad=tubeR(xN.x)-1.4;
+    if(SHARP>.5){rad=R0-1.4;}                    /* le tube reste R0 partout */
     let rel=vec2f(xN.y-CY,xN.z-CZ);
     let dR=length(rel);
     if(dR>rad){
@@ -436,6 +440,15 @@ fn hash01(n0:u32)->f32{
       let push=wallStiffness*(dR-rad);
       particles[id.x].v.y-=n.x*push;
       particles[id.x].v.z-=n.y*push;
+    }
+    if(SHARP>.5){
+      /* face de la plaque : blocage axial hors du trou */
+      let rHole=RT-1.2;
+      let pen=(PLATE+.9)-abs(xN.x-XC);
+      if(dR>rHole&&pen>0.){
+        let side=sign(particles[id.x].position.x-XC+1e-4);
+        particles[id.x].v.x+=side*wallStiffness*pen;
+      }
     }
     /* butée douce en amont (derrière le point de réinjection) */
     if(xN.x<X0+.6){particles[id.x].v.x+=wallStiffness*((X0+.6)-xN.x);}
@@ -1283,6 +1296,8 @@ function drawChart(v1){
 }
 const setSpeed=v=>{FLOW=v/100;vVal.textContent=v;updCalc(v)};
 vSlider.addEventListener('input',e=>setSpeed(+e.target.value));
+if(MODE==='orifice')bG.textContent='⌛ Venturi';
+if(url.has('v'))vSlider.value=url.get('v');
 setSpeed(+vSlider.value);
 pVal.textContent=(NP/1000).toFixed(0)+'k';
 if(url.has('kick'))setInterval(()=>pulse=1,3000);
@@ -1319,8 +1334,8 @@ function frame(now){
   ruData.set(proj,4);ruData.set(m4invPersp(proj),20);ruData.set(viewModel,36);
   ruData.set(m4invRigid(view),52);ruData.set(view,68);ruData.set(model,84);
   device.queue.writeBuffer(ruBuf,0,ruData);
-  /* force axiale « pompe » + très légère gravité transverse */
-  simuData[0]=FLOW;simuData[1]=-.05;simuData[2]=0;
+  /* force axiale « pompe » + gravité transverse (remplissage partiel réaliste) */
+  simuData[0]=FLOW;simuData[1]=-.10;simuData[2]=0;
   simuData[3]=0;
   if(pulse){simuData[4]=1.2;pulse=0}else simuData[4]=0;
   simuData[5]=0;simuData[6]=0;
