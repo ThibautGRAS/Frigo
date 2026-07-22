@@ -365,7 +365,7 @@ const G2P_WGSL=SIM_COMMON+/*wgsl*/`
 struct Cell{vx:i32,vy:i32,vz:i32,mass:i32}
 override R0:f32; override RT:f32; override XC:f32; override LT:f32;
 override CY:f32; override CZ:f32; override X0:f32; override X1:f32;
-override SHARP:f32; override PLATE:f32;
+override SHARP:f32; override PLATE:f32; override RESTD:f32;
 fn tubeR(x:f32)->f32{
   let d=abs(x-XC);
   if(SHARP>.5){return select(R0,RT,d<PLATE);}      /* diaphragme à arête vive */
@@ -382,6 +382,7 @@ fn hash01(n0:u32)->f32{
 @group(0) @binding(3) var<uniform> initBoxSize:vec3f;
 @group(0) @binding(4) var<uniform> numParticles:u32;
 @group(0) @binding(5) var<uniform> dt:f32;
+@group(0) @binding(6) var<storage,read> densities:array<f32>;
 @compute @workgroup_size(64) fn g2p(@builtin(global_invocation_id) id:vec3u){
   if(id.x<numParticles){
     particles[id.x].v=vec3f(0.);
@@ -412,12 +413,20 @@ fn hash01(n0:u32)->f32{
     /* ── recirculation : sorti en aval → réinjecté en amont EN VEINE PLEINE
           (disque complet R0, étalé axialement) — l'admission n'hérite pas du
           profil contracté du jet aval : pas de fausse vena contracta amont ── */
-    if(particles[id.x].position.x>X1-1.0){
+    var recycle=particles[id.x].position.x>X1-1.0;
+    /* pression homogène amont : le fluide SUR-comprimé contre la plaque est
+       refoulé vers l'admission (équivalent du retour instantané d'un circuit
+       incompressible) — comble les poches vides de l'amont */
+    if(!recycle&&particles[id.x].position.x>XC-14.&&particles[id.x].position.x<XC-1.
+       &&densities[id.x]>RESTD*1.5){
+      recycle=hash01(id.x*911u+bitcast<u32>(particles[id.x].position.x))<.012;
+    }
+    if(recycle){
       let seed=id.x*2654435761u+bitcast<u32>(particles[id.x].position.y);
       let u1=hash01(seed);let u2=hash01(seed+1013u);let u3=hash01(seed+2027u);
       let rr=(R0-2.2)*sqrt(u1);
       let an=6.2831853*u2;
-      particles[id.x].position=vec3f(X0+.8+u3*5.,CY+rr*cos(an),CZ+rr*sin(an));
+      particles[id.x].position=vec3f(X0+.8+u3*12.,CY+rr*cos(an),CZ+rr*sin(an));
       particles[id.x].v=vec3f(.6,0.,0.);
       particles[id.x].C=mat3x3f(vec3f(0.),vec3f(0.),vec3f(0.));
     }
@@ -448,6 +457,25 @@ fn hash01(n0:u32)->f32{
       if(dR>rHole&&pen>0.){
         let side=sign(particles[id.x].position.x-XC+1e-4);
         particles[id.x].v.x+=side*wallStiffness*pen;
+      }
+      /* clamp dur : jamais dans l'épaisseur de la plaque hors du trou */
+      let pNow=particles[id.x].position;
+      let dNow=length(vec2f(pNow.y-CY,pNow.z-CZ));
+      if(dNow>rHole&&abs(pNow.x-XC)<PLATE+.15){
+        particles[id.x].position.x=XC+sign(pNow.x-XC+1e-4)*(PLATE+.15);
+      }
+    }
+    /* clamp dur radial : la surpression ne fait jamais déborder du tube */
+    {
+      let pNow=particles[id.x].position;
+      var radH=tubeR(pNow.x)-1.1;
+      if(SHARP>.5){radH=R0-1.1;}
+      let rel2=vec2f(pNow.y-CY,pNow.z-CZ);
+      let d2=length(rel2);
+      if(d2>radH){
+        let n2=rel2/max(d2,1e-4);
+        particles[id.x].position.y=CY+n2.x*radH;
+        particles[id.x].position.z=CZ+n2.y*radH;
       }
     }
     /* butée douce en amont (derrière le point de réinjection) */
@@ -846,7 +874,7 @@ const glowData=new Float32Array(GLOW_N*8);
 const glowVB=device.createBuffer({size:glowData.byteLength,usage:GPUBufferUsage.VERTEX|GPUBufferUsage.COPY_DST});
 /* ── Bulles de cavitation : naissent dans la zone p≈p_vap (vena contracta),
       advectées par le jet, implosent quand la pression se rétablit ── */
-const BUB={list:[],max:190,data:new Float32Array(190*8)};
+const BUB={list:[],max:190,acc:0,data:new Float32Array(190*8)};
 BUBref=BUB;
 const bubVB=device.createBuffer({size:BUB.data.byteLength,usage:GPUBufferUsage.VERTEX|GPUBufferUsage.COPY_DST});
 const CAV={sig:9,v1ms:0};                    /* alimenté par updCalc */
@@ -854,15 +882,21 @@ function stepBubbles(){
   const sev=Math.max(0,1.15-CAV.sig);        /* sévérité 0..~1 (σ<1.15 ⇒ bulles) */
   const vc=CAV.v1ms>0?CAV.v1ms/CELL_M/Math.max(fps,20):0;   /* cellules/frame conduite */
   if(sev>0&&vc>0){
-    const n=Math.min(2+sev*8,BUB.max-BUB.list.length);
+    /* apparition GRADUELLE (cavitation naissante → développée) : taux quadratique
+       + accumulateur fractionnaire ⇒ quelques bulles éparses près du seuil */
+    BUB.acc+=Math.pow(sev,1.9)*11;
+    let n=Math.floor(BUB.acc);BUB.acc-=n;
+    n=Math.min(n,BUB.max-BUB.list.length);
     for(let k=0;k<n;k++){
       const a=Math.random()*6.2832,rr=Math.sqrt(Math.random())*RT*.62;
       BUB.list.push({x:XC+PLATE+Math.random()*1.8,
         y:CY+Math.cos(a)*rr,z:CZ+Math.sin(a)*rr,
         r:.10+Math.random()*.16,life:1});
     }
-  }
-  const rec=3.5+sev*9;                       /* longueur de récupération (implosion) */
+  }else{BUB.acc=0;}
+  /* longueur de poche de vapeur ≈ 0,5 à 5,5·D₂ selon la sévérité :
+     les bulles implosent là où la pression repasse au-dessus de p_vap */
+  const rec=RT*2*(0.5+5*sev);
   for(let i=BUB.list.length-1;i>=0;i--){
     const b=BUB.list[i];
     const vx=vc*Math.pow(R0/tubeR(b.x),2);   /* advection : continuité locale */
@@ -906,7 +940,7 @@ function makePipelines(){
   pipes.upd=device.createComputePipeline({layout:auto,compute:{module:mod(UPDATE_WGSL),entryPoint:'updateGrid',constants:FP}});
   pipes.g2p=device.createComputePipeline({layout:auto,compute:{module:mod(G2P_WGSL),entryPoint:'g2p',
     constants:{...FP,R0:R0,RT:RT,XC:XC,LT:LT,CY:CY,CZ:CZ,X0:X0,X1:X1,
-      SHARP:MODE==='orifice'?1:0,PLATE:PLATE}}});
+      SHARP:MODE==='orifice'?1:0,PLATE:PLATE,RESTD:1/Math.pow(SPACINGV,3)}}});
   pipes.stats=device.createComputePipeline({layout:auto,compute:{module:mod(STATS_WGSL),entryPoint:'stats',
     constants:{XC:XC,LT:LT}}});
   const depthMod=mod(DEPTH_WGSL);
@@ -989,7 +1023,7 @@ function makeBindgroups(){
   bgs.p2g1=bg(pipes.p2g1,[ub(particleBuf),ub(cellBuf),ub(initBoxBuf),ub(npBuf)]);
   bgs.p2g2=bg(pipes.p2g2,[ub(particleBuf),ub(cellBuf),ub(initBoxBuf),ub(npBuf),ub(densityBuf),ub(dtBuf)]);
   bgs.upd=bg(pipes.upd,[ub(cellBuf),ub(realBoxBuf),ub(initBoxBuf),ub(simuBuf),ub(dtBuf)]);
-  bgs.g2p=bg(pipes.g2p,[ub(particleBuf),ub(cellBuf),ub(realBoxBuf),ub(initBoxBuf),ub(npBuf),ub(dtBuf)]);
+  bgs.g2p=bg(pipes.g2p,[ub(particleBuf),ub(cellBuf),ub(realBoxBuf),ub(initBoxBuf),ub(npBuf),ub(dtBuf),ub(densityBuf)]);
   bgs.stats=bg(pipes.stats,[ub(particleBuf),ub(statBuf),ub(npBuf)]);
   bgs.depth=bg(pipes.depth,[ub(particleBuf),ub(ruBuf)]);
   bgs.thick=bg(pipes.thick,[ub(particleBuf),ub(ruBuf)]);
@@ -1174,7 +1208,7 @@ bF.addEventListener('click',()=>{SHOWFLUID=!SHOWFLUID;
    (restDensity recalée ⇒ moins de tassement avec plus de particules) */
 const pSlider=document.getElementById('pSlider'),pVal=document.getElementById('pVal');
 pSlider.addEventListener('change',e=>{
-  SPACINGV=0.82-(+e.target.value/100)*0.24;      /* 0.82 → 0.58 */
+  SPACINGV=0.82-(+e.target.value/100)*0.32;      /* 0.82 → 0.50 (~15k → ~120k) */
   buildSim();makePipelines();makeBindgroups();
   pVal.textContent=(NP/1000).toFixed(0)+'k';
 });
@@ -1287,12 +1321,28 @@ function drawChart(v1){
       const t=hi>lo?(arr[i]-lo)/(hi-lo):.5;
       chx.lineTo(pad+(W-2*pad)*i/N,y0+h*(1-t));
     }chx.stroke()};
+  /* ligne de pression de vapeur : le creux doit clairement la toucher */
+  const yPv=y0+h*(1-(PVAP-0)/(pmax-0));
+  chx.strokeStyle='rgba(239,51,70,.55)';chx.lineWidth=1;chx.setLineDash([4,3]);
+  chx.beginPath();chx.moveTo(pad,yPv);chx.lineTo(W-pad,yPv);chx.stroke();
+  chx.setLineDash([]);
   line(vs,0,vmax*1.05,'#EF3346');
   line(ps,0,pmax,dark?'#7FB2FF':'#0B1F4E');
+  /* segment saturé à p_vap (poche de vapeur) souligné en rouge épais */
+  chx.strokeStyle='#EF3346';chx.lineWidth=3;chx.beginPath();
+  let inCav=false;
+  for(let i=0;i<=N;i++){
+    if(ps[i]<=PVAP+.01){
+      const px=pad+(W-2*pad)*i/N;
+      if(!inCav){chx.moveTo(px,yPv);inCav=true}else chx.lineTo(px,yPv);
+    }else inCav=false;
+  }
+  chx.stroke();chx.lineWidth=1.6;
   chx.font='700 8.5px monospace';
   chx.fillStyle='#EF3346';chx.fillText('v(x)',pad+2,y0+7);
   chx.fillStyle=dark?'#7FB2FF':'#0B1F4E';chx.fillText('p(x)',pad+30,y0+7);
-  if(pmin<=PVAP+.01){chx.fillStyle='#EF3346';chx.fillText('⚠ p = p_vap : cavitation',W-128,y0+7)}
+  chx.fillStyle='rgba(239,51,70,.8)';chx.fillText('p_vap',W-pad-34,yPv-3);
+  if(pmin<=PVAP+.01){chx.fillStyle='#EF3346';chx.fillText('⚠ cavitation',W-pad-76,y0+7)}
 }
 const setSpeed=v=>{FLOW=v/100;vVal.textContent=v;updCalc(v)};
 vSlider.addEventListener('input',e=>setSpeed(+e.target.value));
