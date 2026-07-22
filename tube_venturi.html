@@ -22,14 +22,15 @@ body.dark{background:radial-gradient(120% 100% at 50% 40%,#0A1B38 0%,#010810 100
   cursor:pointer;text-transform:uppercase;touch-action:manipulation;user-select:none;-webkit-user-select:none;
   white-space:nowrap;transition:background .25s,color .25s,border-color .25s}
 .b:active{opacity:.6;transform:scale(.93)}
-#spd{display:flex;align-items:center;gap:9px;background:rgba(255,255,255,.78);
+.spd{display:flex;align-items:center;gap:9px;background:rgba(255,255,255,.78);
   border:1px solid rgba(11,31,78,.16);border-radius:100px;padding:8px 16px}
-#spd label{font:700 9.5px/1 ui-monospace,Menlo,monospace;letter-spacing:1.8px;color:#31518F;text-transform:uppercase}
-#spd input{width:130px;accent-color:var(--red);cursor:pointer}
-#spd b{font:700 10px ui-monospace,monospace;color:var(--ink);min-width:30px;text-align:right}
-body.dark .b,body.dark #spd{background:rgba(0,40,120,.30);border-color:rgba(40,110,255,.30)}
-body.dark .b,body.dark #spd label{color:rgba(100,180,255,.92)}
-body.dark #spd b{color:rgba(160,210,255,.95)}
+.spd label{font:700 9.5px/1 ui-monospace,Menlo,monospace;letter-spacing:1.8px;color:#31518F;text-transform:uppercase}
+.spd input{width:130px;accent-color:var(--red);cursor:pointer}
+.spd.s2 input{width:90px}
+.spd b{font:700 10px ui-monospace,monospace;color:var(--ink);min-width:34px;text-align:right}
+body.dark .b,body.dark .spd{background:rgba(0,40,120,.30);border-color:rgba(40,110,255,.30)}
+body.dark .b,body.dark .spd label{color:rgba(100,180,255,.92)}
+body.dark .spd b{color:rgba(160,210,255,.95)}
 #i{position:fixed;top:calc(10px + env(safe-area-inset-top));right:14px;color:rgba(11,31,78,.34);
   font:9.5px ui-monospace,Menlo,monospace;z-index:5;text-align:right}
 body.dark #i{color:rgba(40,120,255,.38)}
@@ -86,7 +87,9 @@ body.dark #chart{background:rgba(0,40,120,.28);border-color:rgba(40,110,255,.30)
 @media(max-width:900px){#chart{display:none}}
 </style>
 <div id="ui">
-  <div id="spd"><label>Vitesse</label><input type="range" id="vSlider" min="0" max="300" value="60"><b id="vVal">60</b></div>
+  <div class="spd"><label>Vitesse</label><input type="range" id="vSlider" min="0" max="300" value="60"><b id="vVal">60</b></div>
+  <div class="spd s2"><label>Particules</label><input type="range" id="pSlider" min="0" max="100" value="50"><b id="pVal">—</b></div>
+  <button class="b" id="bF">🌊 Flux</button>
   <button class="b" id="bH">ℹ Aide</button>
   <button class="b" id="bG">⭘ Diaphragme</button>
   <button class="b" id="bZ">⏸ Pause</button>
@@ -740,26 +743,38 @@ device.addEventListener?.('uncapturederror',e=>console.error('WebGPU:',e.error?.
 ctx=cv.getContext('webgpu');
 presFormat=navigator.gpu.getPreferredCanvasFormat();
 
-/* ---- Particules : conduite pleine (écoulement immédiat) ---- */
-const initPos=[];
-for(let x=X0+.8;x<X1-1.6;x+=SPACING){
-  const r=tubeR(x)-1.6;
-  for(let y=CY-r;y<=CY+r;y+=SPACING)for(let z=CZ-r;z<=CZ+r;z+=SPACING){
-    const dy=y-CY,dz=z-CZ;
-    if(dy*dy+dz*dz<r*r)
-      initPos.push([x+(Math.random()-.5)*.14,y+(Math.random()-.5)*.14,z+(Math.random()-.5)*.14]);
-  }
-}
-const NP=initPos.length;
+/* ---- Particules : conduite pleine, nombre AJUSTABLE (slider) ----
+   L'espacement pilote la densité au repos : restDensity = 1/espacement³ —
+   plus de particules ⇒ fluide moins compressible visuellement (moins de tassement). */
 const CELLS=GX*GY*GZ;
-const pData=new Float32Array(NP*20);
-for(let i=0;i<NP;i++){
-  pData[i*20]=initPos[i][0];pData[i*20+1]=initPos[i][1];pData[i*20+2]=initPos[i][2];
+let SPACINGV=SPACING;
+let NP=0,particleBuf=null,densityBuf=null;
+function buildSim(){
+  const list=[];
+  for(let x=X0+.8;x<X1-1.6;x+=SPACINGV){
+    const r=tubeR(x)-1.6;
+    if(r<.8)continue;
+    for(let y=CY-r;y<=CY+r;y+=SPACINGV)for(let z=CZ-r;z<=CZ+r;z+=SPACINGV){
+      const dy=y-CY,dz=z-CZ;
+      if(dy*dy+dz*dz<r*r)
+        list.push([x+(Math.random()-.5)*.14,y+(Math.random()-.5)*.14,z+(Math.random()-.5)*.14]);
+    }
+  }
+  NP=list.length;
+  const pData=new Float32Array(NP*20);
+  for(let i=0;i<NP;i++){
+    pData[i*20]=list[i][0];pData[i*20+1]=list[i][1];pData[i*20+2]=list[i][2];
+  }
+  particleBuf?.destroy();densityBuf?.destroy();
+  particleBuf=device.createBuffer({size:pData.byteLength,usage:GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST});
+  device.queue.writeBuffer(particleBuf,0,pData);
+  densityBuf=device.createBuffer({size:NP*4,usage:GPUBufferUsage.STORAGE});
+  device.queue.writeBuffer(npBuf,0,new Uint32Array([NP]));
+  if(BUBref)BUBref.list.length=0;
+  if(MEASref){MEASref.v1=0;MEASref.v2=0;}
 }
-const particleBuf=device.createBuffer({size:pData.byteLength,usage:GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST});
-device.queue.writeBuffer(particleBuf,0,pData);
+let BUBref=null,MEASref=null;   /* affectés après création (évite la TDZ au boot) */
 const cellBuf=device.createBuffer({size:CELLS*16,usage:GPUBufferUsage.STORAGE});
-const densityBuf=device.createBuffer({size:NP*4,usage:GPUBufferUsage.STORAGE});
 const U=sz=>device.createBuffer({size:sz,usage:GPUBufferUsage.UNIFORM|GPUBufferUsage.COPY_DST});
 const ruBuf=U(400),simuBuf=U(32),dtBuf=U(4),npBuf=U(4),initBoxBuf=U(16),realBoxBuf=U(16);
 const palBuf=U(96),glassBuf=U(64);
@@ -767,11 +782,11 @@ const dirXBuf=U(16),dirYBuf=U(16);
 const statBuf=device.createBuffer({size:16,usage:GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST|GPUBufferUsage.COPY_SRC});
 const statRead=device.createBuffer({size:16,usage:GPUBufferUsage.COPY_DST|GPUBufferUsage.MAP_READ});
 device.queue.writeBuffer(dtBuf,0,new Float32Array([DT]));
-device.queue.writeBuffer(npBuf,0,new Uint32Array([NP]));
 device.queue.writeBuffer(initBoxBuf,0,new Float32Array([GX,GY,GZ]));
 device.queue.writeBuffer(realBoxBuf,0,new Float32Array([GX,GY,GZ]));
 device.queue.writeBuffer(dirXBuf,0,new Float32Array([1,0]));
 device.queue.writeBuffer(dirYBuf,0,new Float32Array([0,1]));
+buildSim();
 
 /* ---- Maillage verre du tube : révolution du profil R(x), reconstruit au
         changement d'appareil (venturi ↔ diaphragme) ---- */
@@ -808,29 +823,6 @@ function buildGlass(){
   device.queue.writeBuffer(glassVB,0,V);
 }
 buildGlass();
-/* remise à zéro de l'écoulement selon le profil courant (NP constant) */
-function resetParticles(){
-  const list=[];
-  for(let x=X0+.8;x<X1-1.6;x+=SPACING){
-    const r=tubeR(x)-1.6;
-    if(r<.8)continue;
-    for(let y=CY-r;y<=CY+r;y+=SPACING)for(let z=CZ-r;z<=CZ+r;z+=SPACING){
-      const dy=y-CY,dz=z-CZ;
-      if(dy*dy+dz*dz<r*r)list.push([x,y,z]);
-    }
-  }
-  while(list.length<NP){
-    const p=list[(Math.random()*list.length)|0];
-    list.push([p[0]+(Math.random()-.5)*.4,p[1]+(Math.random()-.5)*.4,p[2]+(Math.random()-.5)*.4]);
-  }
-  const d=new Float32Array(NP*20);
-  for(let i=0;i<NP;i++){
-    d[i*20]=list[i][0]+(Math.random()-.5)*.14;
-    d[i*20+1]=list[i][1]+(Math.random()-.5)*.14;
-    d[i*20+2]=list[i][2]+(Math.random()-.5)*.14;
-  }
-  device.queue.writeBuffer(particleBuf,0,d);
-}
 /* anneaux lumineux : amont, col (vanne), aval — 24 segments chacun, halo+cœur */
 const RING_XS=[X0+.6,XC,X1-1];
 const RSEG=24,EDGE_N=RING_XS.length*RSEG*2;
@@ -842,6 +834,7 @@ const glowVB=device.createBuffer({size:glowData.byteLength,usage:GPUBufferUsage.
 /* ── Bulles de cavitation : naissent dans la zone p≈p_vap (vena contracta),
       advectées par le jet, implosent quand la pression se rétablit ── */
 const BUB={list:[],max:190,data:new Float32Array(190*8)};
+BUBref=BUB;
 const bubVB=device.createBuffer({size:BUB.data.byteLength,usage:GPUBufferUsage.VERTEX|GPUBufferUsage.COPY_DST});
 const CAV={sig:9,v1ms:0};                    /* alimenté par updCalc */
 function stepBubbles(){
@@ -874,8 +867,10 @@ function stepBubbles(){
   }
   for(let i=0;i<BUB.list.length;i++){
     const b=BUB.list[i],w=gridToWorld([b.x,b.y,b.z]);
-    const s=b.r*SCALE*(b.life<.3?b.life/.3:1)*6;
-    BUB.data.set([w[0],w[1],w[2],s, .95,.99,1, .5*Math.min(1,b.life*2)],i*8);
+    /* implosion : flash bref (grossit + brille) puis disparition */
+    const fl=b.life<.28?(1-b.life/.28):0;
+    const s=b.r*SCALE*9*(1+fl*1.6)*(b.life<.08?b.life/.08:1);
+    BUB.data.set([w[0],w[1],w[2],s, 1,1,1, (.85+fl*.9)*Math.min(1,b.life*4)],i*8);
   }
   if(BUB.list.length)device.queue.writeBuffer(bubVB,0,BUB.data,0,BUB.list.length*8);
 }
@@ -894,7 +889,7 @@ function makePipelines(){
   pipes.clear=device.createComputePipeline({layout:auto,compute:{module:mod(CLEAR_WGSL),entryPoint:'clearGrid'}});
   pipes.p2g1=device.createComputePipeline({layout:auto,compute:{module:mod(P2G1_WGSL),entryPoint:'p2g_1',constants:FP}});
   pipes.p2g2=device.createComputePipeline({layout:auto,compute:{module:mod(P2G2_WGSL),entryPoint:'p2g_2',
-    constants:{...FP,stiffness:50,restDensity:3,dynamicViscosity:.15}}});
+    constants:{...FP,stiffness:50,restDensity:1/Math.pow(SPACINGV,3),dynamicViscosity:.15}}});
   pipes.upd=device.createComputePipeline({layout:auto,compute:{module:mod(UPDATE_WGSL),entryPoint:'updateGrid',constants:FP}});
   pipes.g2p=device.createComputePipeline({layout:auto,compute:{module:mod(G2P_WGSL),entryPoint:'g2p',
     constants:{...FP,R0:R0,RT:RT,XC:XC,LT:LT,CY:CY,CZ:CZ,X0:X0,X1:X1,
@@ -952,13 +947,15 @@ function makePipelines(){
   pipes.glassBack=device.createRenderPipeline(glassDesc('front','rgba16float'));
   pipes.glassFront=device.createRenderPipeline(glassDesc('back',presFormat));
   const glowMod=mod(GLOW_WGSL);
-  pipes.glow=device.createRenderPipeline({layout:auto,
+  const glowDesc=fmt=>({layout:auto,
     vertex:{module:glowMod,entryPoint:'vs',buffers:[{arrayStride:32,stepMode:'instance',attributes:[
       {shaderLocation:0,offset:0,format:'float32x3'},{shaderLocation:1,offset:12,format:'float32'},
       {shaderLocation:2,offset:16,format:'float32x3'},{shaderLocation:3,offset:28,format:'float32'}]}]},
-    fragment:{module:glowMod,entryPoint:'fs',targets:[{format:'rgba16float',
+    fragment:{module:glowMod,entryPoint:'fs',targets:[{format:fmt,
       blend:{color:{srcFactor:'one',dstFactor:'one'},alpha:{srcFactor:'one',dstFactor:'one'}}}]},
     primitive:{topology:'triangle-list'}});
+  pipes.glow=device.createRenderPipeline(glowDesc('rgba16float'));
+  pipes.glowOver=device.createRenderPipeline(glowDesc(presFormat));
   const edgeMod=mod(EDGE_WGSL);
   const edgeDesc=fmt=>({layout:auto,
     vertex:{module:edgeMod,entryPoint:'vs',buffers:[{arrayStride:48,stepMode:'instance',attributes:[
@@ -996,6 +993,7 @@ function makeBindgroups(){
   bgs.edgeBg=bg(pipes.edgeBg,[ub(ruBuf)]);
   bgs.edgeOver=bg(pipes.edgeOver,[ub(ruBuf)]);
   bgs.glow=bg(pipes.glow,[ub(ruBuf)]);
+  bgs.glowOver=bg(pipes.glowOver,[ub(ruBuf)]);
 }
 /* ---- Environnement + backdrop (repris de liquid_splash) ---- */
 function skyColor(d,dark){
@@ -1134,6 +1132,7 @@ let pixCap=2.3e6;
 
 /* ═════════════════════════ Contrôles ═════════════════════════ */
 let yaw=.14,pitch=.15,yawV=0,pitchV=0,drag=false,lX=0,lY=0,autoRot=false;
+/* orbite « saisir la scène » : glisser à gauche fait tourner la vue vers la gauche */
 let distT=9.8,dist=9.8;
 cv.addEventListener('pointerdown',e=>{drag=true;autoRot=false;bA.textContent='🌀 Auto';
   lX=e.clientX;lY=e.clientY;yawV=0;pitchV=0;cv.setPointerCapture(e.pointerId)});
@@ -1141,7 +1140,7 @@ cv.addEventListener('pointerup',()=>drag=false);
 cv.addEventListener('pointercancel',()=>drag=false);
 cv.addEventListener('pointermove',e=>{if(!drag)return;
   const dx=(e.clientX-lX)*.0072,dy=(e.clientY-lY)*.006;
-  yaw+=dx;pitch=Math.max(-.9,Math.min(.9,pitch+dy));yawV=dx;pitchV=dy;
+  yaw-=dx;pitch=Math.max(-.9,Math.min(.9,pitch+dy));yawV=-dx;pitchV=dy;
   lX=e.clientX;lY=e.clientY;e.preventDefault()},{passive:false});
 addEventListener('wheel',e=>{distT=Math.max(6,Math.min(19,distT+e.deltaY*.011))},{passive:true});
 let pinch0=0;
@@ -1153,6 +1152,19 @@ cv.addEventListener('touchmove',e=>{if(e.touches.length===2){
 let pulse=0;
 const bA=document.getElementById('bA'),bZ=document.getElementById('bZ'),
       bG=document.getElementById('bG');
+/* fluide visible / masqué (pour observer les bulles seules) */
+let SHOWFLUID=true;
+const bF=document.getElementById('bF');
+bF.addEventListener('click',()=>{SHOWFLUID=!SHOWFLUID;
+  bF.textContent=SHOWFLUID?'🌊 Flux':'👁 Bulles seules';});
+/* slider particules : reconstruit la sim avec le nouvel espacement
+   (restDensity recalée ⇒ moins de tassement avec plus de particules) */
+const pSlider=document.getElementById('pSlider'),pVal=document.getElementById('pVal');
+pSlider.addEventListener('change',e=>{
+  SPACINGV=0.82-(+e.target.value/100)*0.24;      /* 0.82 → 0.58 */
+  buildSim();makePipelines();makeBindgroups();
+  pVal.textContent=(NP/1000).toFixed(0)+'k';
+});
 /* aide */
 const helpEl=document.getElementById('help');
 document.getElementById('bH').addEventListener('click',()=>helpEl.classList.add('show'));
@@ -1162,8 +1174,7 @@ helpEl.addEventListener('click',e=>{if(e.target===helpEl)helpEl.classList.remove
 bG.addEventListener('click',()=>{
   MODE=MODE==='venturi'?'orifice':'venturi';
   bG.textContent=MODE==='venturi'?'⭘ Diaphragme':'⌛ Venturi';
-  makePipelines();makeBindgroups();buildGlass();applyPalette();
-  resetParticles();MEAS.v1=0;MEAS.v2=0;
+  buildSim();makePipelines();makeBindgroups();buildGlass();applyPalette();
   updCalc(+vSlider.value);
 });
 document.getElementById('bP').addEventListener('click',()=>pulse=1);
@@ -1187,6 +1198,7 @@ const D1mm=50, beta=RT/R0, D2mm=D1mm*beta, Cc=0.62, Cd=0.97, RHO=1000,
 const CELL_M=(D1mm/1000)/(2*R0);                          // m par cellule
 const A1=Math.PI*Math.pow(D1mm/2000,2);                   // m²
 const MEAS={v1:0,v2:0,pending:false};
+MEASref=MEAS;
 const vms=vGrid=>vGrid*CELL_M*(fps*SUBSTEPS*DT);          // cellules/u → m/s (cadence réelle)
 function updCalc(v){
   const orif=MODE==='orifice';
@@ -1272,6 +1284,7 @@ function drawChart(v1){
 const setSpeed=v=>{FLOW=v/100;vVal.textContent=v;updCalc(v)};
 vSlider.addEventListener('input',e=>setSpeed(+e.target.value));
 setSpeed(+vSlider.value);
+pVal.textContent=(NP/1000).toFixed(0)+'k';
 if(url.has('kick'))setInterval(()=>pulse=1,3000);
 
 /* ═════════════════════════ Boucle ═════════════════════════ */
@@ -1362,7 +1375,8 @@ function frame(now){
     const p=enc.beginRenderPass({colorAttachments:[{view:depthA.createView(),
       clearValue:{r:1e5,g:0,b:0,a:1},loadOp:'clear',storeOp:'store'}],
       depthStencilAttachment:{view:zbuf.createView(),depthClearValue:1,depthLoadOp:'clear',depthStoreOp:'store'}});
-    p.setPipeline(pipes.depth);p.setBindGroup(0,bgs.depth);p.draw(6,NP);p.end();
+    if(SHOWFLUID){p.setPipeline(pipes.depth);p.setBindGroup(0,bgs.depth);p.draw(6,NP);}
+    p.end();
   }
   {let p=pass(depthB.createView(),{r:1e5,g:0,b:0,a:1});
    p.setPipeline(pipes.nrf1);p.setBindGroup(0,bgs.nrfX);p.draw(3);p.end();
@@ -1371,7 +1385,8 @@ function frame(now){
    p=pass(depthB.createView(),{r:1e5,g:0,b:0,a:1});
    p.setPipeline(pipes.nrf2);p.setBindGroup(0,bgs.nrf2);p.draw(3);p.end()}
   {let p=pass(thickA.createView(),{r:0,g:0,b:0,a:1});
-   p.setPipeline(pipes.thick);p.setBindGroup(0,bgs.thick);p.draw(6,NP);p.end();
+   if(SHOWFLUID){p.setPipeline(pipes.thick);p.setBindGroup(0,bgs.thick);p.draw(6,NP);}
+   p.end();
    p=pass(thickB.createView(),{r:0,g:0,b:0,a:1});
    p.setPipeline(pipes.gauss);p.setBindGroup(0,bgs.gaussX);p.draw(3);p.end();
    p=pass(thickA.createView(),{r:0,g:0,b:0,a:1});
@@ -1383,6 +1398,11 @@ function frame(now){
     p.setVertexBuffer(0,glassVB);p.setIndexBuffer(glassIB,'uint32');p.drawIndexed(glassIdxN);
     p.setPipeline(pipes.edgeOver);p.setBindGroup(0,bgs.edgeOver);
     p.setVertexBuffer(0,edgeVB);p.draw(6,EDGE_N/2,0,EDGE_N/2);
+    /* bulles re-dessinées par-dessus le fluide : nettement visibles */
+    if(BUB.list.length){
+      p.setPipeline(pipes.glowOver);p.setBindGroup(0,bgs.glowOver);
+      p.setVertexBuffer(0,bubVB);p.draw(6,BUB.list.length);
+    }
     p.end();
   }
   device.queue.submit([enc.finish()]);
