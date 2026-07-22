@@ -414,12 +414,15 @@ fn hash01(n0:u32)->f32{
           (disque complet R0, étalé axialement) — l'admission n'hérite pas du
           profil contracté du jet aval : pas de fausse vena contracta amont ── */
     var recycle=particles[id.x].position.x>X1-1.0;
-    /* pression homogène amont : le fluide SUR-comprimé contre la plaque est
-       refoulé vers l'admission (équivalent du retour instantané d'un circuit
-       incompressible) — comble les poches vides de l'amont */
-    if(!recycle&&particles[id.x].position.x>XC-14.&&particles[id.x].position.x<XC-1.
-       &&densities[id.x]>RESTD*1.5){
-      recycle=hash01(id.x*911u+bitcast<u32>(particles[id.x].position.x))<.012;
+    /* DÉBIT AUTO-COMPENSÉ : taux de refoulement proportionnel à la sur-densité
+       (plus l'accumulation grossit, plus la masse repart vers l'admission —
+       comme le retour instantané d'un vrai circuit incompressible) */
+    if(!recycle&&particles[id.x].position.x<XC-1.){
+      let over=densities[id.x]/RESTD;
+      if(over>1.30){
+        let p=clamp((over-1.30)*.06,0.,.08);
+        recycle=hash01(id.x*911u+bitcast<u32>(particles[id.x].position.x))<p;
+      }
     }
     if(recycle){
       let seed=id.x*2654435761u+bitcast<u32>(particles[id.x].position.y);
@@ -430,8 +433,9 @@ fn hash01(n0:u32)->f32{
       particles[id.x].v=vec3f(.6,0.,0.);
       particles[id.x].C=mat3x3f(vec3f(0.),vec3f(0.),vec3f(0.));
     }
+    /* clamp axial dur : jamais au-delà des bouchons du tube */
     particles[id.x].position=vec3f(
-      clamp(particles[id.x].position.x,1.5,realBoxSize.x-2.),
+      clamp(particles[id.x].position.x,X0+.35,X1-.4),
       clamp(particles[id.x].position.y,1.,realBoxSize.y-2.),
       clamp(particles[id.x].position.z,1.,realBoxSize.z-2.));
     /* ── parois, prédiction k=2 ──
@@ -468,8 +472,8 @@ fn hash01(n0:u32)->f32{
     /* clamp dur radial : la surpression ne fait jamais déborder du tube */
     {
       let pNow=particles[id.x].position;
-      var radH=tubeR(pNow.x)-1.1;
-      if(SHARP>.5){radH=R0-1.1;}
+      var radH=tubeR(pNow.x)-1.25;
+      if(SHARP>.5){radH=R0-1.25;}
       let rel2=vec2f(pNow.y-CY,pNow.z-CZ);
       let d2=length(rel2);
       if(d2>radH){
@@ -864,9 +868,10 @@ function buildGlass(){
   device.queue.writeBuffer(glassVB,0,V);
 }
 buildGlass();
-/* anneaux lumineux : amont, col (vanne), aval — 24 segments chacun, halo+cœur */
+/* anneaux lumineux : amont, col (vanne), aval (halo+cœur) + anneau-témoin
+   pointillé au diamètre théorique de la vena contracta (mode diaphragme) */
 const RING_XS=[X0+.6,XC,X1-1];
-const RSEG=24,EDGE_N=RING_XS.length*RSEG*2;
+const RSEG=24,EDGE_N=RSEG*(RING_XS.length*2+1);
 const edgeData=new Float32Array(EDGE_N*12);
 const edgeVB=device.createBuffer({size:edgeData.byteLength,usage:GPUBufferUsage.VERTEX|GPUBufferUsage.COPY_DST});
 const GLOW_N=2;
@@ -936,7 +941,7 @@ function makePipelines(){
   pipes.clear=device.createComputePipeline({layout:auto,compute:{module:mod(CLEAR_WGSL),entryPoint:'clearGrid'}});
   pipes.p2g1=device.createComputePipeline({layout:auto,compute:{module:mod(P2G1_WGSL),entryPoint:'p2g_1',constants:FP}});
   pipes.p2g2=device.createComputePipeline({layout:auto,compute:{module:mod(P2G2_WGSL),entryPoint:'p2g_2',
-    constants:{...FP,stiffness:50,restDensity:1/Math.pow(SPACINGV,3),dynamicViscosity:.15}}});
+    constants:{...FP,stiffness:70,restDensity:1/Math.pow(SPACINGV,3),dynamicViscosity:.15}}});
   pipes.upd=device.createComputePipeline({layout:auto,compute:{module:mod(UPDATE_WGSL),entryPoint:'updateGrid',constants:FP}});
   pipes.g2p=device.createComputePipeline({layout:auto,compute:{module:mod(G2P_WGSL),entryPoint:'g2p',
     constants:{...FP,R0:R0,RT:RT,XC:XC,LT:LT,CY:CY,CZ:CZ,X0:X0,X1:X1,
@@ -1150,6 +1155,18 @@ function applyPalette(){
       const B=gridToWorld([rx,CY+Math.cos(a1)*r,CZ+Math.sin(a1)*r]);
       if(pass===0)put(A,B,dark?.045:.026,dark?.30:.26,col);
       else put(A,B,dark?.010:.006,dark?.75:.55,core);
+    }
+  }
+  /* anneau-témoin vena contracta : D_vc = D₂·√Cc, ~½·D₂ en aval de la plaque,
+     pointillé rouge — permet de comparer le pincement simulé à la théorie */
+  {
+    const on=MODE==='orifice';
+    const rvc=RT*Math.sqrt(.62), xm=XC+PLATE+RT;
+    for(let s=0;s<RSEG;s++){
+      const a0=s/RSEG*Math.PI*2,a1=(s+1)/RSEG*Math.PI*2;
+      const A=gridToWorld([xm,CY+Math.cos(a0)*rvc,CZ+Math.sin(a0)*rvc]);
+      const B=gridToWorld([xm,CY+Math.cos(a1)*rvc,CZ+Math.sin(a1)*rvc]);
+      put(A,B,.012,(on&&s%2===0)?.6:0,[1,.30,.38]);
     }
   }
   device.queue.writeBuffer(edgeVB,0,edgeData);
@@ -1385,7 +1402,7 @@ function frame(now){
   ruData.set(m4invRigid(view),52);ruData.set(view,68);ruData.set(model,84);
   device.queue.writeBuffer(ruBuf,0,ruData);
   /* force axiale « pompe » + gravité transverse (remplissage partiel réaliste) */
-  simuData[0]=FLOW;simuData[1]=-.10;simuData[2]=0;
+  simuData[0]=FLOW;simuData[1]=-.18;simuData[2]=0;
   simuData[3]=0;
   if(pulse){simuData[4]=1.2;pulse=0}else simuData[4]=0;
   simuData[5]=0;simuData[6]=0;
@@ -1462,7 +1479,7 @@ function frame(now){
     p.setPipeline(pipes.glassFront);p.setBindGroup(0,bgs.glassFront);
     p.setVertexBuffer(0,glassVB);p.setIndexBuffer(glassIB,'uint32');p.drawIndexed(glassIdxN);
     p.setPipeline(pipes.edgeOver);p.setBindGroup(0,bgs.edgeOver);
-    p.setVertexBuffer(0,edgeVB);p.draw(6,EDGE_N/2,0,EDGE_N/2);
+    p.setVertexBuffer(0,edgeVB);p.draw(6,RSEG*4,0,RSEG*3);   /* cœurs + anneau D_vc */
     /* bulles re-dessinées par-dessus le fluide : nettement visibles */
     if(BUB.list.length){
       p.setPipeline(pipes.glowOver);p.setBindGroup(0,bgs.glowOver);
